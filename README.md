@@ -115,9 +115,51 @@ local config = {
 
 ## Testing
 
-To test the Capsium Nginx Reactor:
+The Capsium Nginx Reactor includes a comprehensive testing framework using pytest. The tests verify the functionality of the reactor, including package extraction, route resolution, content serving, and API endpoints.
 
-1. Place a test Capsium package in the `test/fixtures` directory.
+### Running Tests
+
+To run the tests, simply execute the `run_tests.sh` script:
+
+```bash
+./run_tests.sh
+```
+
+This script will:
+1. Check for required dependencies (Python, pip, Docker)
+2. Install the necessary Python packages
+3. Build the Docker image
+4. Run the container with the test Capsium packages
+5. Execute the tests
+6. Generate an HTML report of the test results
+7. Clean up by stopping and removing the container
+
+### Test Coverage
+
+The tests cover:
+
+1. **Basic Functionality**:
+   - Server is running and responding to requests
+   - Static content is served correctly
+   - Nginx headers are set properly
+
+2. **API Endpoints**:
+   - `/api/v1/introspect/metadata` returns package metadata
+   - `/api/v1/introspect/routes` returns package routes
+   - `/api/v1/introspect/content-hashes` returns content hashes
+   - `/api/v1/introspect/content-validity` returns validity info
+
+3. **Package Handling**:
+   - Capsium packages can be accessed
+   - CSS and JavaScript files are served with correct MIME types
+   - Different index routes work as expected
+   - Nonexistent packages and files return 404
+
+### Manual Testing
+
+You can also test the Capsium Nginx Reactor manually:
+
+1. Place a Capsium package in the `test/fixtures` directory.
 
 2. Start the Docker container:
    ```bash

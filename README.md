@@ -101,17 +101,112 @@ The Capsium Nginx Reactor provides several API endpoints for introspection:
 
 ## Configuration
 
-You can configure the Capsium Nginx Reactor by modifying the configuration in `nginx/conf.d/capsium.conf`:
+The Capsium Nginx Reactor supports a flexible configuration system that allows you to customize how packages are mounted and served.
 
-```lua
-local config = {
-    package_dir = "/var/lib/capsium/packages",
-    extract_dir = "/var/lib/capsium/extracted",
-    cache_enabled = true,
-    cache_ttl = 3600,  -- 1 hour
-    log_level = "info"
+### Configuration File
+
+The configuration file is a JSON file that can be placed in one of the following locations (in order of precedence):
+
+1. Path specified by the `CAPSIUM_CONFIG_PATH` environment variable
+2. `/etc/capsium/config.json`
+3. `/etc/capsium/nginx/config.json`
+4. `/var/lib/capsium/config.json`
+5. `./config.json`
+
+### Basic Configuration
+
+A basic configuration file looks like this:
+
+```json
+{
+  "package_dir": "/var/lib/capsium/packages",
+  "extract_dir": "/var/lib/capsium/extracted",
+  "cache_enabled": true,
+  "cache_ttl": 3600,
+  "log_level": "info",
+  "packages_config_dir": "/etc/capsium/packages"
 }
 ```
+
+### Package Mount Configuration
+
+You can configure how packages are mounted using the `mounts` array in the configuration file:
+
+```json
+{
+  "mounts": [
+    {
+      "package": "package-name-1.0.0.cap",
+      "path": "/custom/path",
+      "domain": "example.com",
+      "port": 80,
+      "options": {
+        "cache_ttl": 7200,
+        "headers": {
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Content-Type-Options": "nosniff"
+        }
+      }
+    }
+  ]
+}
+```
+
+### Per-Package Configuration
+
+You can also configure packages individually by placing a JSON file in the `packages_config_dir` directory:
+
+```
+/etc/capsium/packages/
+  ├── package-name-1.0.0.json
+  ├── another-package-2.0.0.json
+  └── ...
+```
+
+Each file should contain the configuration for that package:
+
+```json
+{
+  "path": "/custom/path",
+  "domain": "custom.example.com",
+  "port": 8443,
+  "https": true,
+  "options": {
+    "cache_ttl": 7200,
+    "headers": {
+      "X-Frame-Options": "SAMEORIGIN"
+    },
+    "cors": {
+      "allowed_origins": ["https://example.com"],
+      "allowed_methods": ["GET", "POST"]
+    }
+  }
+}
+```
+
+### Configuration Options
+
+The following options are available:
+
+- `package_dir`: Directory where Capsium packages are stored
+- `extract_dir`: Directory where packages are extracted
+- `cache_enabled`: Whether to enable caching
+- `cache_ttl`: Cache time-to-live in seconds
+- `log_level`: Logging level (debug, info, warn, error)
+- `packages_config_dir`: Directory for per-package configuration files
+- `mounts`: Array of package mount configurations
+
+Each mount configuration can include:
+
+- `package`: Name of the Capsium package
+- `path`: Path where the package should be mounted
+- `domain`: Domain name for the package (for virtual hosting)
+- `port`: Port number for the package
+- `https`: Whether to use HTTPS
+- `options`: Additional options for the package
+  - `cache_ttl`: Cache time-to-live for this package
+  - `headers`: Custom HTTP headers to add to responses
+  - `cors`: Cross-Origin Resource Sharing configuration
 
 ## Testing
 

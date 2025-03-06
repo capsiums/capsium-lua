@@ -1,0 +1,35 @@
+{
+  "package_dir": "/var/lib/capsium/packages",
+  "extract_dir": "/var/lib/capsium/extracted",
+  "cache_enabled": true,
+  "cache_ttl": 3600,
+  "log_level": "info",
+  "packages_config_dir": "/etc/capsium/packages",
+  "mounts": [
+    {
+      "package": "test-package-0.1.0.cap",
+      "path": "/app",
+      "domain": "example.com",
+      "port": 80,
+      "options": {
+        "cache_ttl": 7200,
+        "headers": {
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Content-Type-Options": "nosniff"
+        }
+      }
+    },
+    {
+      "package": "another-package-2.0.0.cap",
+      "path": "/api",
+      "domain": "api.example.com",
+      "port": 443,
+      "options": {
+        "cors": {
+          "allowed_origins": ["https://example.com"],
+          "allowed_methods": ["GET", "POST"]
+        }
+      }
+    }
+  ]
+}

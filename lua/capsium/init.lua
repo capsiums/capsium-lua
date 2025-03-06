@@ -9,26 +9,12 @@ local cjson = require "cjson"
 local extractor = require "capsium.extractor"
 local router = require "capsium.router"
 local utils = require "capsium.utils"
-
--- Configuration defaults
-local default_config = {
-    package_dir = "/var/lib/capsium/packages",
-    extract_dir = "/var/lib/capsium/extracted",
-    cache_enabled = true,
-    cache_ttl = 3600,  -- 1 hour
-    log_level = "info"
-}
+local config_module = require "capsium.config"
 
 -- Initialize the module with configuration
-function _M.init(config)
-    local cfg = config or {}
-
-    -- Merge with defaults
-    for k, v in pairs(default_config) do
-        if cfg[k] == nil then
-            cfg[k] = v
-        end
-    end
+function _M.init(options)
+    -- Initialize configuration
+    local cfg = config_module.init(options)
 
     -- Ensure directories exist
     local ok, err = extractor.ensure_dirs(cfg.package_dir, cfg.extract_dir)
@@ -44,7 +30,7 @@ function _M.init(config)
     extractor.init(cfg)
     router.init(cfg)
 
-    ngx.log(ngx.INFO, "Capsium Nginx plugin initialized")
+    ngx.log(ngx.INFO, "Capsium Nginx plugin initialized with config from: " .. (options.config_path or "default"))
     return true
 end
 
@@ -56,6 +42,9 @@ function _M.handle_request()
         ngx.log(ngx.ERR, "No Capsium package specified")
         return ngx.exit(ngx.HTTP_NOT_FOUND)
     end
+
+    -- Get mount configuration for this package
+    local mount_config = config_module.get_mount_config(package_name)
 
     -- Check if package exists and extract if needed
     local package_path = _M.config.package_dir .. "/" .. package_name
@@ -72,12 +61,34 @@ function _M.handle_request()
         return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
     end
 
-    -- Resolve the request path to a file
+    -- Get the request path and adjust based on mount path
     local request_path = ngx.var.uri
+    local mount_path = mount_config.path or "/capsium/" .. package_name
+
+    -- If the request is under the mount path, adjust the path
+    if mount_path ~= "/" and string.sub(request_path, 1, #mount_path) == mount_path then
+        -- Remove the mount path prefix
+        request_path = string.sub(request_path, #mount_path + 1)
+        -- Ensure the path starts with a slash
+        if request_path == "" then
+            request_path = "/"
+        elseif string.sub(request_path, 1, 1) ~= "/" then
+            request_path = "/" .. request_path
+        end
+    end
+
+    -- Resolve the request path to a file
     local file_path, mime_type = router.resolve_route(routes, request_path, extract_path)
     if not file_path then
         ngx.log(ngx.WARN, "Route not found for path: ", request_path)
         return ngx.exit(ngx.HTTP_NOT_FOUND)
+    end
+
+    -- Apply any custom headers from mount configuration
+    if mount_config.headers then
+        for name, value in pairs(mount_config.headers) do
+            ngx.header[name] = value
+        end
     end
 
     -- Serve the file

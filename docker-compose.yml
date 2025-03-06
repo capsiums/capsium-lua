@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  capsium-nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      # Mount Capsium packages directory
+      - ./test/fixtures:/var/lib/capsium/packages
+      # Mount Lua modules for development
+      - ./lua/capsium:/etc/nginx/lua/capsium
+      # Mount Nginx configuration for development
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    environment:
+      - NGINX_HOST=localhost
+      - NGINX_PORT=80
+    restart: unless-stopped

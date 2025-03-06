@@ -8,6 +8,7 @@ local _M = {
 local cjson = require "cjson"
 local extractor = require "capsium.extractor"
 local router = require "capsium.router"
+local utils = require "capsium.utils"
 
 -- Configuration defaults
 local default_config = {
@@ -85,6 +86,105 @@ function _M.handle_request()
     -- Use nginx's internal mechanisms to serve the file
     ngx.var.capsium_file_path = file_path
     return ngx.exec("@capsium_serve_file")
+end
+
+-- Get metadata for all packages
+function _M.get_metadata()
+    local packages = utils.get_packages(_M.config.package_dir)
+    local metadata_list = {}
+
+    for _, package in ipairs(packages) do
+        local extract_path = _M.config.extract_dir .. "/" .. package.name
+        local metadata, err = extractor.get_package_info(extract_path)
+
+        if metadata then
+            table.insert(metadata_list, {
+                name = metadata.name,
+                version = metadata.version,
+                dependencies = metadata.dependencies,
+                timestamp = utils.format_timestamp(package.modification_time)
+            })
+        end
+    end
+
+    return { packages = metadata_list }
+end
+
+-- Get routes for all packages
+function _M.get_routes()
+    local packages = utils.get_packages(_M.config.package_dir)
+    local routes_list = {}
+
+    for _, package in ipairs(packages) do
+        local extract_path = _M.config.extract_dir .. "/" .. package.name
+        local routes, err = router.load_routes(extract_path)
+
+        if routes then
+            local package_routes = {}
+            for path, route in pairs(routes.routes) do
+                table.insert(package_routes, {
+                    path = path,
+                    target = route.target.file
+                })
+            end
+
+            table.insert(routes_list, {
+                package = package.name,
+                routes = package_routes
+            })
+        end
+    end
+
+    return { routes = routes_list }
+end
+
+-- Get content hashes for all packages
+function _M.get_content_hashes()
+    local packages = utils.get_packages(_M.config.package_dir)
+    local hashes_list = {}
+
+    for _, package in ipairs(packages) do
+        local hash, err = utils.calculate_hash(package.path)
+
+        if hash then
+            table.insert(hashes_list, {
+                package = package.name,
+                hash = hash
+            })
+        end
+    end
+
+    return { contentHashes = hashes_list }
+end
+
+-- Get content validity for all packages
+function _M.get_content_validity()
+    local packages = utils.get_packages(_M.config.package_dir)
+    local validity_list = {}
+
+    for _, package in ipairs(packages) do
+        local extract_path = _M.config.extract_dir .. "/" .. package.name
+        local metadata_path = extract_path .. "/metadata.json"
+
+        -- Check if metadata.json exists
+        local valid = false
+        local reason = nil
+
+        if lfs.attributes(metadata_path) then
+            valid = true
+        else
+            reason = "Missing metadata.json"
+        end
+
+        table.insert(validity_list, {
+            package = package.name,
+            valid = valid,
+            lastChecked = utils.format_timestamp(os.time()),
+            reason = reason
+        })
+    end
+
+    return { contentValidity = validity_list }
 end
 
 return _M

@@ -1,0 +1,34 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "target": {
+        "file": "content/index.html"
+      }
+    },
+    {
+      "path": "/index",
+      "target": {
+        "file": "content/index.html"
+      }
+    },
+    {
+      "path": "/index.html",
+      "target": {
+        "file": "content/index.html"
+      }
+    },
+    {
+      "path": "/styles.css",
+      "target": {
+        "file": "content/styles.css"
+      }
+    },
+    {
+      "path": "/script.js",
+      "target": {
+        "file": "content/script.js"
+      }
+    }
+  ]
+}

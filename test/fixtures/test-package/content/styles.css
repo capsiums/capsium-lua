@@ -1,0 +1,71 @@
+/* Capsium Test Package Styles */
+
+body {
+    font-family: Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+    color: #333;
+    background-color: #f4f4f4;
+}
+
+.container {
+    width: 80%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    min-height: 100vh;
+}
+
+header {
+    background-color: #0e1a85;
+    color: #fff;
+    padding: 20px;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+h1 {
+    margin: 0;
+}
+
+h2 {
+    color: #0e1a85;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+ul {
+    margin-left: 20px;
+}
+
+button {
+    background-color: #0e1a85;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-top: 20px;
+}
+
+button:hover {
+    background-color: #0a1260;
+}
+
+footer {
+    margin-top: 40px;
+    text-align: center;
+    color: #777;
+    font-size: 0.9em;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
+}
+
+.highlight {
+    background-color: #ffeb3b;
+    padding: 5px;
+    border-radius: 3px;
+}

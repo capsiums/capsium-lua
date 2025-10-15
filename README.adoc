@@ -2,7 +2,7 @@
 :toc:
 :toc-placement!:
 
-image:https://github.com/YOUR_USERNAME/capsium-nginx/actions/workflows/test.yml/badge.svg["Build", link="https://github.com/YOUR_USERNAME/capsium-nginx/actions/workflows/test.yml"]
+image:https://github.com/capsiums/capsium-nginx/actions/workflows/test.yml/badge.svg["Build", link="https://github.com/capsiums/capsium-nginx/actions/workflows/test.yml"]
 image:https://img.shields.io/badge/license-MIT-blue.svg["License", link="LICENSE"]
 
 toc::[]

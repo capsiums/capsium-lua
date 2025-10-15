@@ -22,6 +22,8 @@ def test_static_files(api_client):
     assert response.status_code == 404
 
 def test_nginx_headers(api_client):
-    """Test that nginx is setting the expected headers."""
+    """Test that nginx/openresty is setting the expected headers."""
     response = api_client.get("/")
-    assert "nginx" in response.headers.get("Server", "").lower()
+    # OpenResty is nginx-based, so check for either
+    server_header = response.headers.get("Server", "").lower()
+    assert "nginx" in server_header or "openresty" in server_header

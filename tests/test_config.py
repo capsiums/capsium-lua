@@ -47,21 +47,21 @@ def test_custom_mount_path(api_client):
     # Verify the content is HTML
     assert "text/html" in response.headers.get("Content-Type", "")
 
-    # Verify the content contains expected text
-    assert "Capsium Test Package" in response.text
+    # Verify the content contains expected text from Metanorma package
+    assert "ISO sample documents in Metanorma" in response.text
 
     # Test accessing a resource with the custom path
-    response = api_client.get("/app/styles.css")
+    response = api_client.get("/app/documents.xml")
     assert response.status_code == 200
-    assert "text/css" in response.headers.get("Content-Type", "")
-    assert "Capsium Test Package Styles" in response.text
+    assert "xml" in response.headers.get("Content-Type", "").lower()
 
 def test_custom_headers(api_client):
     """Test that custom headers are applied from configuration."""
     # Test custom headers from global mount configuration
     response = api_client.get("/app/")
     assert response.status_code == 200
-    assert response.headers.get("X-Test-Header") == "test-value"
+    # The config.json has X-Frame-Options and X-Content-Type-Options
+    assert response.headers.get("X-Frame-Options") == "SAMEORIGIN"
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
 
 def test_nested_routes_with_custom_path(api_client):
@@ -70,15 +70,15 @@ def test_nested_routes_with_custom_path(api_client):
     response = api_client.get("/app/index.html")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("Content-Type", "")
-    assert "Capsium Test Package" in response.text
+    assert "ISO sample documents in Metanorma" in response.text
 
 def test_default_path_still_works(api_client):
     """Test that the default path still works alongside custom paths."""
     # Test default path
-    response = api_client.get("/capsium/test-package-0.1.0/")
+    response = api_client.get("/capsium/mn-samples-iso-0.1.0/")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("Content-Type", "")
-    assert "Capsium Test Package" in response.text
+    assert "ISO sample documents in Metanorma" in response.text
 
 def test_nonexistent_custom_path(api_client):
     """Test that nonexistent custom paths return 404."""
@@ -92,17 +92,17 @@ def test_domain_based_routing(api_client):
     response = api_client.get_with_host("/app/", "example.com")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("Content-Type", "")
-    assert "Capsium Test Package" in response.text
+    assert "ISO sample documents in Metanorma" in response.text
 
     # Verify custom headers for this domain
-    assert response.headers.get("X-Test-Header") == "test-value"
+    assert response.headers.get("X-Frame-Options") == "SAMEORIGIN"
 
 def test_domain_and_path_combination(api_client):
     """Test that domain and path combinations work."""
     # Test with example.com domain and /app path
-    response = api_client.get_with_host("/app/styles.css", "example.com")
+    response = api_client.get_with_host("/app/documents.xml", "example.com")
     assert response.status_code == 200
-    assert "text/css" in response.headers.get("Content-Type", "")
+    assert "xml" in response.headers.get("Content-Type", "").lower()
 
     # Test with example.com domain and incorrect path
     response = api_client.get_with_host("/wrong-path/", "example.com")
@@ -113,12 +113,12 @@ def test_multiple_domains(api_client):
     # Test with example.com domain
     response1 = api_client.get_with_host("/app/", "example.com")
     assert response1.status_code == 200
-    assert response1.headers.get("X-Test-Header") == "test-value"
+    assert response1.headers.get("X-Frame-Options") == "SAMEORIGIN"
 
     # Test with default domain
     response2 = api_client.get("/app/")
     assert response2.status_code == 200
 
     # Content should be the same
-    assert "Capsium Test Package" in response1.text
-    assert "Capsium Test Package" in response2.text
+    assert "ISO sample documents in Metanorma" in response1.text
+    assert "ISO sample documents in Metanorma" in response2.text

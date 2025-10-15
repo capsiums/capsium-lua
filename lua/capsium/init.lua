@@ -43,11 +43,22 @@ function _M.handle_request()
         return ngx.exit(ngx.HTTP_NOT_FOUND)
     end
 
+    -- Strip .cap extension if present (so we can add it consistently)
+    package_name = package_name:gsub("%.cap$", "")
+
     -- Get mount configuration for this package
     local mount_config = config_module.get_mount_config(package_name)
 
     -- Check if package exists and extract if needed
-    local package_path = _M.config.package_dir .. "/" .. package_name
+    local package_path = _M.config.package_dir .. "/" .. package_name .. ".cap"
+
+    -- Check if package file exists
+    local lfs = require "lfs"
+    if not lfs.attributes(package_path) then
+        ngx.log(ngx.WARN, "Package not found: ", package_path)
+        return ngx.exit(ngx.HTTP_NOT_FOUND)
+    end
+
     local extract_path, err = extractor.extract_package(package_path, _M.config.extract_dir)
     if not extract_path then
         ngx.log(ngx.ERR, "Failed to extract Capsium package: ", err)
@@ -94,9 +105,18 @@ function _M.handle_request()
     -- Serve the file
     ngx.header.content_type = mime_type or "application/octet-stream"
 
-    -- Use nginx's internal mechanisms to serve the file
-    ngx.var.capsium_file_path = file_path
-    return ngx.exec("@capsium_serve_file")
+    -- Read and serve the file content directly
+    local file, err = io.open(file_path, "rb")
+    if not file then
+        ngx.log(ngx.ERR, "Failed to open file: ", file_path, " - ", err)
+        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    end
+
+    local content = file:read("*all")
+    file:close()
+
+    ngx.print(content)
+    return ngx.OK
 end
 
 -- Get metadata for all packages
@@ -170,6 +190,7 @@ end
 
 -- Get content validity for all packages
 function _M.get_content_validity()
+    local lfs = require "lfs"
     local packages = utils.get_packages(_M.config.package_dir)
     local validity_list = {}
 

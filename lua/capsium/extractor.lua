@@ -17,16 +17,25 @@ function _M.init(cfg)
     config = cfg
 end
 
--- Ensure directories exist
+-- Ensure directories exist (creates parent directories recursively)
 function _M.ensure_dirs(...)
     local dirs = {...}
     for _, dir in ipairs(dirs) do
         local stat = lfs.attributes(dir)
         if not stat then
-            -- Directory doesn't exist, create it
-            local success, err = lfs.mkdir(dir)
-            if not success then
-                return false, "Failed to create directory " .. dir .. ": " .. (err or "unknown error")
+            -- Directory doesn't exist, create it and all parent directories
+            local path = ""
+            for part in dir:gmatch("[^/]+") do
+                path = path .. "/" .. part
+                local parent_stat = lfs.attributes(path)
+                if not parent_stat then
+                    local success, err = lfs.mkdir(path)
+                    if not success then
+                        return false, "Failed to create directory " .. path .. ": " .. (err or "unknown error")
+                    end
+                elseif parent_stat.mode ~= "directory" then
+                    return false, path .. " exists but is not a directory"
+                end
             end
         elseif stat.mode ~= "directory" then
             return false, dir .. " exists but is not a directory"
@@ -112,33 +121,62 @@ function _M.extract_package(package_path, extract_dir)
         return nil, "Failed to open package as zip: " .. (err or "unknown error")
     end
 
-    -- Extract all files
-    for file in zfile:files() do
-        local filename = file.filename
+    -- Get number of files in archive
+    local num_files = zfile:get_num_files()
+    if not num_files then
+        zfile:close()
+        return nil, "Failed to get number of files in package"
+    end
 
-        -- Create directories as needed
-        local dir = extract_path .. "/" .. filename:match("(.*)/")
-        if dir and dir ~= "" then
-            local ok, err = _M.ensure_dirs(dir)
-            if not ok then
-                zfile:close()
-                return nil, err
-            end
-        end
-
-        -- Extract the file
-        local file_content = zfile:open(filename):read("*all")
-
-        -- Write the file
-        local out_path = extract_path .. "/" .. filename
-        local out_file, err = io.open(out_path, "wb")
-        if not out_file then
+    -- Extract all files (Lua uses 1-based indexing)
+    for i = 1, num_files do
+        local filename = zfile:get_name(i)
+        if not filename then
             zfile:close()
-            return nil, "Failed to create file " .. out_path .. ": " .. (err or "unknown error")
+            return nil, "Failed to get filename for index " .. i
         end
 
-        out_file:write(file_content)
-        out_file:close()
+        local file_stat = zfile:stat(filename)
+        if not file_stat then
+            zfile:close()
+            return nil, "Failed to get file info for " .. filename
+        end
+
+        -- Skip directories (they end with /)
+        if not filename:match("/$") then
+            -- Create directories as needed
+            local dir = filename:match("(.*)/")
+            if dir and dir ~= "" then
+                local full_dir = extract_path .. "/" .. dir
+                local ok, err = _M.ensure_dirs(full_dir)
+                if not ok then
+                    zfile:close()
+                    return nil, err
+                end
+            end
+
+            -- Extract the file
+            local file_handle, err = zfile:open(filename)
+            if not file_handle then
+                zfile:close()
+                return nil, "Failed to open file in zip: " .. filename .. ": " .. (err or "unknown error")
+            end
+
+            -- Read the file content (use file size from stat)
+            local file_content = file_handle:read(file_stat.size)
+            file_handle:close()
+
+            -- Write the file
+            local out_path = extract_path .. "/" .. filename
+            local out_file, err = io.open(out_path, "wb")
+            if not out_file then
+                zfile:close()
+                return nil, "Failed to create file " .. out_path .. ": " .. (err or "unknown error")
+            end
+
+            out_file:write(file_content)
+            out_file:close()
+        end
     end
 
     zfile:close()

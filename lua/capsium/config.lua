@@ -194,21 +194,26 @@ end
 function _M.get_package_config(package_name)
     local config = _M.get_config()
 
+    -- Strip .cap extension if present for consistent matching
+    local clean_name = package_name:gsub("%.cap$", "")
+
     -- Check if there's a specific configuration for this package
-    if config.package_configs and config.package_configs[package_name] then
-        return config.package_configs[package_name]
+    if config.package_configs and config.package_configs[clean_name] then
+        return config.package_configs[clean_name]
     end
 
     -- Check if there's a mount configuration for this package
+    -- Match both with and without .cap extension for flexibility
     for _, mount in ipairs(config.mounts or {}) do
-        if mount.package == package_name then
+        local mount_pkg = mount.package:gsub("%.cap$", "")
+        if mount_pkg == clean_name then
             return mount
         end
     end
 
     -- Return default configuration
     return {
-        path = "/capsium/" .. package_name,
+        path = "/capsium/" .. clean_name,
         domain = nil,
         port = nil
     }
@@ -216,12 +221,16 @@ end
 
 -- Get mount configuration for a package
 function _M.get_mount_config(package_name)
-    local pkg_config = _M.get_package_config(package_name)
+    -- Strip .cap extension if present for consistent matching
+    local clean_name = package_name:gsub("%.cap$", "")
+
+    local pkg_config = _M.get_package_config(clean_name)
 
     -- Ensure the mount has at least the basic properties
-    pkg_config.path = pkg_config.path or "/capsium/" .. package_name
+    pkg_config.path = pkg_config.path or "/capsium/" .. clean_name
     pkg_config.domain = pkg_config.domain or nil
     pkg_config.port = pkg_config.port or nil
+    pkg_config.headers = pkg_config.options and pkg_config.options.headers or pkg_config.headers
 
     return pkg_config
 end

@@ -7,7 +7,7 @@
   "packages_config_dir": "/etc/capsium/packages",
   "mounts": [
     {
-      "package": "test-package-0.1.0.cap",
+      "package": "mn-samples-iso-0.1.0.cap",
       "path": "/app",
       "domain": "example.com",
       "port": 80,

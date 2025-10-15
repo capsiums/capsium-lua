@@ -144,24 +144,51 @@ end
 
 -- Resolve a route to a file path
 function _M.resolve_route(routes, request_path, extract_path)
-    -- Check for exact route match
-    local route = routes.routes[request_path]
+    local route = nil
 
-    -- If no exact match, try with trailing slash
-    if not route and request_path:sub(-1) ~= "/" then
-        route = routes.routes[request_path .. "/"]
-    end
+    -- Convert array-based routes to indexed routes for faster lookup
+    if routes.routes and #routes.routes > 0 and routes.routes[1].path then
+        -- Routes are in array format, need to find matching route
+        for _, r in ipairs(routes.routes) do
+            if r.path == request_path then
+                route = r
+                break
+            end
+        end
 
-    -- If still no match, try without trailing slash
-    if not route and request_path:sub(-1) == "/" then
-        route = routes.routes[request_path:sub(1, -2)]
-    end
+        -- If no exact match, try with trailing slash
+        if not route and request_path:sub(-1) ~= "/" then
+            for _, r in ipairs(routes.routes) do
+                if r.path == request_path .. "/" then
+                    route = r
+                    break
+                end
+            end
+        end
 
-    -- If still no match, try with /index.html
-    if not route and request_path:sub(-1) == "/" then
-        route = routes.routes[request_path .. "index.html"]
-    elseif not route then
-        route = routes.routes[request_path .. "/index.html"]
+        -- If still no match, try without trailing slash
+        if not route and request_path:sub(-1) == "/" then
+            local path_without_slash = request_path:sub(1, -2)
+            for _, r in ipairs(routes.routes) do
+                if r.path == path_without_slash then
+                    route = r
+                    break
+                end
+            end
+        end
+    else
+        -- Routes are in indexed format (legacy/generated routes)
+        route = routes.routes[request_path]
+
+        -- If no exact match, try with trailing slash
+        if not route and request_path:sub(-1) ~= "/" then
+            route = routes.routes[request_path .. "/"]
+        end
+
+        -- If still no match, try without trailing slash
+        if not route and request_path:sub(-1) == "/" then
+            route = routes.routes[request_path:sub(1, -2)]
+        end
     end
 
     -- If no route found, return nil
@@ -175,8 +202,15 @@ function _M.resolve_route(routes, request_path, extract_path)
         return nil
     end
 
-    -- Construct full file path
-    local file_path = extract_path .. "/" .. target_file
+    -- Construct full file path (routes.json files are relative to content/ directory)
+    local file_path
+    if target_file:sub(1, 8) == "content/" then
+        -- Already has content/ prefix
+        file_path = extract_path .. "/" .. target_file
+    else
+        -- Add content/ prefix
+        file_path = extract_path .. "/content/" .. target_file
+    end
 
     -- Check if file exists
     if not lfs.attributes(file_path) then

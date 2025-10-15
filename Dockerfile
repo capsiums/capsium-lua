@@ -33,9 +33,6 @@ COPY lua/capsium /etc/nginx/lua/capsium
 COPY nginx/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY nginx/conf.d /etc/nginx/conf.d
 
-# Copy static files
-COPY static /var/lib/capsium/static
-
 # Expose port
 EXPOSE 80
 

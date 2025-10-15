@@ -43,14 +43,53 @@ jobs:
           file: ./Dockerfile
           push: false
           tags: capsium-nginx:test
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             BASE_IMAGE=openresty/openresty:${{ matrix.openresty-version }}
 
+      - name: Start Docker container
+        run: |
+          docker run -d --name capsium-nginx-test \
+            -p 8080:80 \
+            -v ${{ github.workspace }}/test/fixtures:/var/lib/capsium/packages \
+            -v ${{ github.workspace }}/lua/capsium:/etc/nginx/lua/capsium \
+            -v ${{ github.workspace }}/nginx/conf.d:/etc/nginx/conf.d \
+            -v ${{ github.workspace }}/config:/etc/capsium \
+            -e CAPSIUM_CONFIG_PATH=/etc/capsium/config.json \
+            capsium-nginx:test
+
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for nginx to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8080/ > /dev/null; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          echo "Server failed to start in time"
+          docker logs capsium-nginx-test
+          exit 1
+
       - name: Run tests
         run: |
           python -m pytest tests/ -v --html=test-report.html --self-contained-html
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          echo "Container logs:"
+          docker logs capsium-nginx-test
+
+      - name: Stop Docker container
+        if: always()
+        run: |
+          docker stop capsium-nginx-test || true
+          docker rm capsium-nginx-test || true
 
       - name: Upload test results
         if: always()
@@ -99,6 +138,7 @@ jobs:
           file: ./Dockerfile
           push: false
           tags: capsium-nginx:test
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -111,9 +151,47 @@ jobs:
           mkdir -p test/fixtures/multi-package-test/content
           echo '<html><body>Multi Package Test</body></html>' > test/fixtures/multi-package-test/content/index.html
 
+      - name: Start Docker container
+        run: |
+          docker run -d --name capsium-nginx-integration \
+            -p 8080:80 \
+            -v ${{ github.workspace }}/test/fixtures:/var/lib/capsium/packages \
+            -v ${{ github.workspace }}/lua/capsium:/etc/nginx/lua/capsium \
+            -v ${{ github.workspace }}/nginx/conf.d:/etc/nginx/conf.d \
+            -v ${{ github.workspace }}/config:/etc/capsium \
+            -e CAPSIUM_CONFIG_PATH=/etc/capsium/config.json \
+            capsium-nginx:test
+
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for nginx to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8080/ > /dev/null; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 1
+          done
+          echo "Server failed to start in time"
+          docker logs capsium-nginx-integration
+          exit 1
+
       - name: Run integration tests
         run: |
           python -m pytest tests/test_config.py tests/test_packages.py -v --html=integration-report.html --self-contained-html
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          echo "Container logs:"
+          docker logs capsium-nginx-integration
+
+      - name: Stop Docker container
+        if: always()
+        run: |
+          docker stop capsium-nginx-integration || true
+          docker rm capsium-nginx-integration || true
 
       - name: Upload integration test results
         if: always()

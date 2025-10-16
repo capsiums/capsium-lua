@@ -1,16 +1,17 @@
 ARG BASE_IMAGE=openresty/openresty:alpine-fat
 FROM ${BASE_IMAGE}
 
-# Install dependencies (alpine-fat already includes lua-cjson, luafilesystem)
+# Install system dependencies
 RUN apk add --no-cache \
     luarocks \
     libzip-dev \
     zip \
     unzip
 
-# Install additional Lua dependencies not in alpine-fat
-RUN luarocks install luafilesystem && \
-    luarocks install lua-zip
+# Install Capsium via rockspec (includes all Lua dependencies)
+COPY capsium-dev-1.rockspec /tmp/
+COPY lib/ /tmp/lib/
+RUN cd /tmp && luarocks make capsium-dev-1.rockspec && rm -rf /tmp/*
 
 # Create Capsium directories and set permissions for nginx user (nobody)
 RUN mkdir -p /var/lib/capsium/packages && \
@@ -20,8 +21,7 @@ RUN mkdir -p /var/lib/capsium/packages && \
     chown -R nobody:nobody /var/lib/capsium && \
     chown -R nobody:nobody /var/log/nginx
 
-# Copy Lua modules
-COPY lib/capsium /usr/local/openresty/luajit/share/lua/5.1/capsium
+# Copy Nginx-specific Reactor layer (not in rockspec yet)
 COPY lua/capsium /etc/nginx/lua/capsium
 
 # Copy Nginx configuration

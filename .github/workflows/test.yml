@@ -1,11 +1,15 @@
-name: Test Capsium Nginx Extension
+name: test
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master, develop ]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
 
 jobs:
   test:
@@ -16,191 +20,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
         with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install test dependencies
-        run: |
-          pip install -r tests/requirements.txt
+          ruby-version: '3.4'
+          bundler-cache: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          tags: capsium-nginx:test
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BASE_IMAGE=openresty/openresty:alpine-fat
-
-      - name: Start Docker container
-        run: |
-          docker run -d --name capsium-nginx-test \
-            -p 8080:80 \
-            -v ${{ github.workspace }}/test/fixtures:/var/lib/capsium/packages \
-            -v ${{ github.workspace }}/lua/capsium:/etc/nginx/lua/capsium \
-            -v ${{ github.workspace }}/nginx/conf.d:/etc/nginx/conf.d \
-            -v ${{ github.workspace }}/config:/etc/capsium \
-            -e CAPSIUM_CONFIG_PATH=/etc/capsium/config.json \
-            capsium-nginx:test
-
-      - name: Wait for server to be ready
-        run: |
-          echo "Waiting for nginx to start..."
-          for i in {1..30}; do
-            if curl -s http://localhost:8080/ > /dev/null; then
-              echo "Server is ready!"
-              exit 0
-            fi
-            echo "Waiting... ($i/30)"
-            sleep 1
-          done
-          echo "Server failed to start in time"
-          docker logs capsium-nginx-test
-          exit 1
 
       - name: Run tests
-        run: |
-          python -m pytest tests/ -v --html=test-report.html --self-contained-html
+        run: bundle exec rake ci
 
-      - name: Show container logs on failure
-        if: failure()
-        run: |
-          echo "Container logs:"
-          docker logs capsium-nginx-test
-
-      - name: Stop Docker container
-        if: always()
-        run: |
-          docker stop capsium-nginx-test || true
-          docker rm capsium-nginx-test || true
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: RSpec Report
+        uses: SonicGarden/rspec-report-action@v6
         with:
-          name: test-report-openresty-alpine-fat
-          path: test-report.html
-          retention-days: 30
-
-      - name: Test summary
+          json-path: tmp/rspec_results.json
+          title: '# :test_tube: RSpec Test Results'
         if: always()
-        run: |
-          echo "## Test Results for OpenResty alpine-fat" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f test-report.html ]; then
-            echo "✅ Tests completed. Check artifacts for detailed report." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Tests failed to generate report." >> $GITHUB_STEP_SUMMARY
-          fi
-
-  integration-test:
-    name: Integration Test - Multiple Packages
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install test dependencies
-        run: |
-          pip install -r tests/requirements.txt
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          tags: capsium-nginx:test
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Create additional test package
-        run: |
-          mkdir -p test/fixtures/multi-package-test
-          echo '{"name": "multi-test", "version": "1.0.0"}' > test/fixtures/multi-package-test/manifest.json
-          echo '{"name": "multi-test", "version": "1.0.0"}' > test/fixtures/multi-package-test/metadata.json
-          echo '{"routes": {"/": {"target": {"file": "index.html"}}}}' > test/fixtures/multi-package-test/routes.json
-          mkdir -p test/fixtures/multi-package-test/content
-          echo '<html><body>Multi Package Test</body></html>' > test/fixtures/multi-package-test/content/index.html
-
-      - name: Start Docker container
-        run: |
-          docker run -d --name capsium-nginx-integration \
-            -p 8080:80 \
-            -v ${{ github.workspace }}/test/fixtures:/var/lib/capsium/packages \
-            -v ${{ github.workspace }}/lua/capsium:/etc/nginx/lua/capsium \
-            -v ${{ github.workspace }}/nginx/conf.d:/etc/nginx/conf.d \
-            -v ${{ github.workspace }}/config:/etc/capsium \
-            -e CAPSIUM_CONFIG_PATH=/etc/capsium/config.json \
-            capsium-nginx:test
-
-      - name: Wait for server to be ready
-        run: |
-          echo "Waiting for nginx to start..."
-          for i in {1..30}; do
-            if curl -s http://localhost:8080/ > /dev/null; then
-              echo "Server is ready!"
-              exit 0
-            fi
-            echo "Waiting... ($i/30)"
-            sleep 1
-          done
-          echo "Server failed to start in time"
-          docker logs capsium-nginx-integration
-          exit 1
-
-      - name: Run integration tests
-        run: |
-          python -m pytest tests/test_config.py tests/test_packages.py -v --html=integration-report.html --self-contained-html
-
-      - name: Show container logs on failure
-        if: failure()
-        run: |
-          echo "Container logs:"
-          docker logs capsium-nginx-integration
-
-      - name: Stop Docker container
-        if: always()
-        run: |
-          docker stop capsium-nginx-integration || true
-          docker rm capsium-nginx-integration || true
-
-      - name: Upload integration test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-test-report
-          path: integration-report.html
-          retention-days: 30
-
-      - name: Integration test summary
-        if: always()
-        run: |
-          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Tested multiple package configurations:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Custom mount paths" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Domain-based routing" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Per-package configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Multiple packages served simultaneously" >> $GITHUB_STEP_SUMMARY

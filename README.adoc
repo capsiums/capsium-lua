@@ -1074,19 +1074,281 @@ Run this script periodically with cron:
 ----
 ====
 
-[[automatic-testing]]
-== Automatic testing
+== Development
 
 === General
 
-The Capsium Nginx extension includes comprehensive automated tests that run
-on every push and pull request via GitHub Actions. The test suite validates
-package serving, route resolution, custom headers, and API endpoints across
-multiple OpenResty versions.
+The Capsium Nginx extension uses Rake for task automation, including Docker
+container management, running tests, and development workflows. All tasks are
+designed to be simple and intuitive for both local development and CI/CD.
+
+=== Available Rake tasks
+
+To see all available tasks:
+
+[source,bash]
+----
+bundle exec rake -T
+----
+
+==== Docker management
+
+`rake docker:build`:: Build the Docker image with OpenResty
+
+`rake docker:start`:: Start the Docker container (or reuse if already running)
+
+`rake docker:stop`:: Stop and remove the Docker container
+
+`rake docker:restart`:: Restart the container
+
+`rake docker:logs`:: View container logs (follows output)
+
+`rake docker:shell`:: Open a shell in the running container
+
+`rake docker:clean`:: Remove containers and images
+
+==== Testing
+
+`rake` or `rake test`:: Run all tests (default task, ensures container is running)
+
+`rake spec`:: Run all RSpec tests with documentation format
+
+`rake spec:ci_report`:: Run tests and generate JSON report for CI
+
+`rake spec:api`:: Run only API introspection tests
+
+`rake spec:packages`:: Run only package serving tests
+
+`rake spec:config`:: Run only configuration tests
+
+`rake spec:basic`:: Run only basic functionality tests
+
+==== Workflows
+
+`rake ci`:: Full CI workflow: build → start → test → cleanup
+
+`rake install`:: Install Ruby dependencies (bundle install)
+
+`rake clean`:: Clean all artifacts and containers
+
+=== Running tests locally
+
+The simplest way to run tests locally:
+
+[source,bash]
+----
+bundle exec rake
+----
+
+This automatically:
+
+. Checks if a test container is already running
+. Reuses the existing container if available
+. Starts a new container if needed
+. Runs all RSpec tests with documentation output
+
+For a complete CI-like test run:
+
+[source,bash]
+----
+bundle exec rake ci
+----
+
+This performs a full build and test cycle, cleaning up afterward.
+
+=== Test structure
+
+Tests are organized in the `spec/` directory using RSpec:
+
+[source]
+----
+spec/
+├── spec_helper.rb       RSpec configuration and helpers
+├── api_spec.rb          API introspection endpoint tests
+├── basic_spec.rb        Basic server functionality tests
+├── config_spec.rb       Configuration and mounting tests
+└── packages_spec.rb     Package serving and routing tests
+----
+
+=== Development workflow
+
+==== Starting the server
+
+To start the development server:
+
+[source,bash]
+----
+bundle exec rake docker:start
+----
+
+The server will be available at http://localhost:8080. If the container is
+already running, this command will reuse it.
+
+==== Viewing logs
+
+Monitor server logs in real-time:
+
+[source,bash]
+----
+bundle exec rake docker:logs
+----
+
+Press Ctrl+C to stop following logs.
+
+==== Testing changes
+
+After making changes to Lua code or configuration:
+
+[source,bash]
+----
+bundle exec rake docker:restart
+bundle exec rake spec
+----
+
+The restart ensures your changes are loaded, and spec runs the tests.
+
+==== Debugging
+
+Open a shell in the running container to inspect files or run commands:
+
+[source,bash]
+----
+bundle exec rake docker:shell
+----
+
+Inside the container, you can:
+
+* Check extracted packages: `ls /var/lib/capsium/extracted/`
+* View Nginx config: `cat /usr/local/openresty/nginx/conf/nginx.conf`
+* Test configuration: `nginx -t`
+* View error logs: `tail -f /usr/local/openresty/nginx/logs/error.log`
+
+==== Running specific tests
+
+Run only the tests you're working on:
+
+[source,bash]
+----
+# API tests only
+bundle exec rake spec:api
+
+# Package tests only
+bundle exec rake spec:packages
+
+# Configuration tests only
+bundle exec rake spec:config
+
+# Basic functionality tests only
+bundle exec rake spec:basic
+----
+
+==== Generating test reports
+
+Create an HTML test report:
+
+[source,bash]
+----
+bundle exec rake spec:html
+----
+
+The report will be saved to `test-report.html` and can be opened in a browser.
+
+.Example development session
+[example]
+A typical development workflow:
+
+[source,bash]
+----
+# Install dependencies (first time only)
+bundle exec rake install
+
+# Start the server
+bundle exec rake docker:start
+
+# Make changes to lua/capsium/router.lua
+
+# Restart to load changes
+bundle exec rake docker:restart
+
+# Run tests to verify
+bundle exec rake spec
+
+# Check logs if tests fail
+bundle exec rake docker:logs
+
+# Debug in the container if needed
+bundle exec rake docker:shell
+
+# Clean up when done
+bundle exec rake docker:stop
+----
+
+[[automatic-testing]]
+=== Continuous integration
+
+==== General
+
+The project uses GitHub Actions for automated testing on every push and pull
+request. The CI workflow ensures code quality and compatibility across
+different environments.
+
+==== GitHub Actions workflow
+
+The workflow automatically:
+
+. Checks out the code
+. Sets up Ruby 3.4 with bundler caching
+. Sets up Docker Buildx for building containers
+. Runs the complete test suite
+. Generates and displays test results
+
+==== Test reporting
+
+Test results are displayed directly in GitHub using the RSpec Report action.
+This provides:
+
+* **Job Summary**: Formatted test results in the GitHub Actions summary
+* **Pull Request Comments**: Automatic comments on PRs with test failures
+* **Detailed Failure Information**: Stack traces and error messages for debugging
+
+.GitHub Actions workflow configuration
+[source,yaml]
+----
+- name: Run tests
+  run: bundle exec rake ci
+
+- name: RSpec Report
+  uses: SonicGarden/rspec-report-action@v6
+  with:
+    json-path: tmp/rspec_results.json
+    title: '# :test_tube: RSpec Test Results'
+  if: always()
+----
+
+The `rake ci` command:
+
+. Builds the Docker image
+. Starts the test container
+. Runs all RSpec tests with JSON output
+. Cleans up containers
+
+The RSpec Report action then processes the JSON output and creates formatted
+reports visible in the GitHub interface.
+
+==== Running CI locally
+
+You can run the exact same CI workflow locally:
+
+[source,bash]
+----
+bundle exec rake ci
+----
+
+This ensures your changes will pass CI before pushing to GitHub.
 
 === Test coverage
 
-The test suite includes 25 tests covering:
+The test suite includes 28 tests covering:
 
 * Basic functionality (server status, static content)
 * Package extraction and serving
@@ -1096,79 +1358,35 @@ The test suite includes 25 tests covering:
 * API introspection endpoints
 * Error handling (404 responses, invalid packages)
 
-=== Running tests locally
-
-To run the test suite locally using Docker:
-
-[source,bash]
-----
-./run_tests.sh
-----
-
-This script:
-
-. Checks for required dependencies (Python, Docker)
-. Installs Python test dependencies
-. Builds the Docker image
-. Starts the test container
-. Runs pytest with coverage reporting
-. Generates an HTML test report
-. Cleans up the container
-
-=== Test structure
-
-Tests are organized in the `tests/` directory:
-
-[source]
-----
-tests/
-├── conftest.py          Pytest fixtures and test setup
-├── test_api.py          API introspection endpoint tests
-├── test_basic.py        Basic server functionality tests
-├── test_config.py       Configuration and mounting tests
-├── test_packages.py     Package serving and routing tests
-└── requirements.txt     Python test dependencies
-----
-
-=== Continuous integration workflow
-
-The GitHub Actions workflow (`.github/workflows/test.yml`) runs tests on:
-
-* Every push to the repository
-* Every pull request
-* Multiple OpenResty versions (alpine-fat, alpine)
-
-The workflow:
-
-. Checks out the repository
-. Sets up Python environment
-. Installs test dependencies
-. Builds Docker image with specified OpenResty version
-. Starts the test container
-. Runs the full pytest suite
-. Uploads test reports as artifacts
-. Cleans up containers
-
-=== Test results
-
-All tests must pass before merging pull requests. The workflow provides:
-
-* Real-time test results in the Actions tab
-* Detailed error messages for failures
-* HTML test reports (downloadable from workflow artifacts)
-* Coverage information showing tested code paths
+All tests must pass before merging pull requests.
 
 .Example test output
 [source]
 ----
-============================= test session starts ==============================
-test_api.py::test_metadata_api PASSED                                    [  4%]
-test_api.py::test_routes_api PASSED                                      [  8%]
-test_config.py::test_custom_mount_path PASSED                            [ 48%]
-test_config.py::test_custom_headers PASSED                               [ 52%]
-test_config.py::test_domain_based_routing PASSED                         [ 68%]
-test_packages.py::test_package_access PASSED                             [ 80%]
-============================== 25 passed in 0.17s ===============================
+API Introspection Endpoints
+  GET /api/v1/introspect/metadata
+    returns metadata for all packages
+  GET /api/v1/introspect/routes
+    returns route information for all packages
+
+Basic Server Functionality
+  server running
+    responds to requests
+  static content
+    serves static content correctly
+
+Configuration
+  custom mount path
+    allows accessing package at custom mount path
+  custom headers
+    applies custom headers from configuration
+
+Capsium Packages
+  package access
+    allows access to Capsium packages
+
+Finished in 0.077 seconds (files took 0.073 seconds to load)
+28 examples, 0 failures
 ----
 
 == Troubleshooting

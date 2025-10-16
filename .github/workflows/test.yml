@@ -30,6 +30,11 @@ jobs:
       - name: Set up LuaRocks
         uses: leafo/gh-actions-luarocks@v4
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzip-dev
+
       - name: Install dependencies from rockspec
         run: |
           luarocks make capsium-dev-1.rockspec --only-deps

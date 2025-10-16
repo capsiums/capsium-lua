@@ -1,4 +1,4 @@
--- capsium-nginx Lua module
+-- capsium-lua Lua module
 -- Route resolution functionality
 
 local _M = {

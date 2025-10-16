@@ -1,4 +1,4 @@
--- capsium-nginx Lua module
+-- capsium-lua Lua module
 -- Utility functions
 
 local _M = {

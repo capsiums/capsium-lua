@@ -1,4 +1,4 @@
-name: test
+name: tests
 
 on:
   push:
@@ -8,33 +8,51 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  checks: write
 
 jobs:
   test:
-    name: Test with OpenResty
+    name: Lua Unit Tests (Busted)
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        lua-version: ['5.1', '5.2', '5.3', '5.4', 'luajit']
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+      - name: Set up Lua ${{ matrix.lua-version }}
+        uses: leafo/gh-actions-lua@v10
         with:
-          ruby-version: '3.4'
-          bundler-cache: true
+          luaVersion: ${{ matrix.lua-version }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up LuaRocks
+        uses: leafo/gh-actions-luarocks@v4
 
-      - name: Run tests
-        run: bundle exec rake ci
+      - name: Install dependencies from rockspec
+        run: |
+          luarocks make capsium-dev-1.rockspec --only-deps
 
-      - name: RSpec Report
-        uses: SonicGarden/rspec-report-action@v6
+      - name: Install test dependencies
+        run: |
+          luarocks install busted
+          luarocks install luacov
+
+      - name: Run Busted tests
+        run: |
+          busted --verbose --coverage
+
+      - name: Generate coverage report
+        run: |
+          luacov
+          cat luacov.report.out
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          json-path: tmp/rspec_results.json
-          title: '# :test_tube: RSpec Test Results'
+          name: coverage-${{ matrix.lua-version }}
+          path: |
+            luacov.report.out
+            luacov.stats.out
         if: always()

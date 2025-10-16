@@ -2,7 +2,8 @@
 :toc:
 :toc-placement!:
 
-image:https://github.com/capsiums/capsium-nginx/actions/workflows/test.yml/badge.svg["Build", link="https://github.com/capsiums/capsium-nginx/actions/workflows/test.yml"]
+image:https://github.com/capsiums/capsium-lua/actions/workflows/test.yml/badge.svg["Lua Library Tests", link="https://github.com/capsiums/capsium-lua/actions/workflows/test.yml"]
+image:https://github.com/capsiums/capsium-lua/actions/workflows/nginx.yml/badge.svg["Nginx Integration Tests", link="https://github.com/capsiums/capsium-lua/actions/workflows/nginx.yml"]
 image:https://img.shields.io/badge/license-MIT-blue.svg["License", link="LICENSE"]
 
 toc::[]
@@ -152,8 +153,8 @@ deployments.
 +
 [source,bash]
 ----
-git clone https://github.com/yourusername/capsium-nginx.git
-cd capsium-nginx
+git clone https://github.com/yourusername/capsium-lua.git
+cd capsium-lua
 ----
 
 . Create directories for your packages:
@@ -1288,28 +1289,60 @@ bundle exec rake docker:stop
 
 ==== General
 
-The project uses GitHub Actions for automated testing on every push and pull
-request. The CI workflow ensures code quality and compatibility across
-different environments.
+The project uses GitHub Actions for automated testing with two separate
+workflows:
 
-==== GitHub Actions workflow
+. **Lua Library Tests** - Unit tests for the core Capsium library using Busted
+. **Nginx Integration Tests** - Full-stack integration tests with OpenResty using RSpec
+
+This separation ensures both the framework-agnostic library and the Nginx
+integration are thoroughly tested.
+
+==== Lua Library Tests workflow
+
+Tests the core Capsium library across multiple Lua versions (5.1, 5.2, 5.3,
+5.4, and LuaJIT).
+
+The workflow automatically:
+
+. Checks out the code
+. Sets up the specified Lua version
+. Installs LuaRocks
+. Installs dependencies from `capsium-dev-1.rockspec`
+. Runs Busted unit tests with coverage
+. Generates and uploads coverage reports
+
+.Running Lua library tests locally
+[source,bash]
+----
+# Install dependencies from rockspec
+luarocks make capsium-dev-1.rockspec --only-deps
+
+# Install test dependencies
+luarocks install busted
+luarocks install luacov
+
+# Run tests with coverage
+busted --verbose --coverage
+
+# Generate coverage report
+luacov
+cat luacov.report.out
+----
+
+==== Nginx Integration Tests workflow
+
+Tests the complete Nginx integration with RSpec, verifying the Reactor layer
+and HTTP serving functionality.
 
 The workflow automatically:
 
 . Checks out the code
 . Sets up Ruby 3.4 with bundler caching
 . Sets up Docker Buildx for building containers
-. Runs the complete test suite
+. Builds the Docker image (installing Capsium via rockspec)
+. Runs all RSpec integration tests
 . Generates and displays test results
-
-==== Test reporting
-
-Test results are displayed directly in GitHub using the RSpec Report action.
-This provides:
-
-* **Job Summary**: Formatted test results in the GitHub Actions summary
-* **Pull Request Comments**: Automatic comments on PRs with test failures
-* **Detailed Failure Information**: Stack traces and error messages for debugging
 
 .GitHub Actions workflow configuration
 [source,yaml]
@@ -1327,7 +1360,7 @@ This provides:
 
 The `rake ci` command:
 
-. Builds the Docker image
+. Builds the Docker image with `luarocks make capsium-dev-1.rockspec`
 . Starts the test container
 . Runs all RSpec tests with JSON output
 . Cleans up containers
@@ -1335,10 +1368,26 @@ The `rake ci` command:
 The RSpec Report action then processes the JSON output and creates formatted
 reports visible in the GitHub interface.
 
+==== Test reporting
+
+Test results are displayed directly in GitHub:
+
+* **Lua Library Tests**: Coverage reports uploaded as artifacts
+* **Nginx Integration Tests**: Formatted test results in the GitHub Actions
+summary with automatic comments on PRs
+* **Detailed Failure Information**: Stack traces and error messages for debugging
+
 ==== Running CI locally
 
-You can run the exact same CI workflow locally:
+You can run the same workflows locally:
 
+.Lua library tests
+[source,bash]
+----
+busted --verbose --coverage
+----
+
+.Nginx integration tests
 [source,bash]
 ----
 bundle exec rake ci
@@ -1477,7 +1526,7 @@ If configuration changes aren't taking effect:
 +
 [source,bash]
 ----
-docker exec capsium-nginx cat /etc/capsium/config.json
+docker exec capsium-lua cat /etc/capsium/config.json
 ----
 
 . Check JSON syntax:

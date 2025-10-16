@@ -1,4 +1,4 @@
--- capsium-nginx configuration module
+-- capsium-lua configuration module
 -- Handles loading and managing configuration for Capsium Nginx Reactor
 
 local _M = {}

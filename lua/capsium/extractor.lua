@@ -1,4 +1,4 @@
--- capsium-nginx Lua module
+-- capsium-lua Lua module
 -- Package extraction functionality
 
 local _M = {

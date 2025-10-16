@@ -1,4 +1,4 @@
--- capsium-nginx Lua module
+-- capsium-lua Lua module
 -- Main entry point for the Capsium Nginx plugin
 
 local _M = {

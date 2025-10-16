@@ -1,0 +1,15 @@
+return {
+  _all = {
+    coverage = true,
+    verbose = true,
+    lpath = "lib/?.lua;lib/?/init.lua",
+  },
+  default = {
+    output = "gtest",
+    pattern = "_spec%.lua$",
+  },
+  unit = {
+    ROOT = {"test/"},
+    pattern = "_spec%.lua$",
+  }
+}

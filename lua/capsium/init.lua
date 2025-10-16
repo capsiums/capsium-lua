@@ -121,8 +121,13 @@ end
 
 -- Get metadata for all packages
 function _M.get_metadata()
-    local packages = utils.get_packages(_M.config.package_dir)
+    local packages, err = utils.get_packages(_M.config.package_dir)
     local metadata_list = {}
+
+    if not packages then
+        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
+        return { packages = cjson.empty_array }
+    end
 
     for _, package in ipairs(packages) do
         local extract_path = _M.config.extract_dir .. "/" .. package.name
@@ -138,13 +143,22 @@ function _M.get_metadata()
         end
     end
 
+    -- Ensure empty array is encoded as [] not {}
+    if #metadata_list == 0 then
+        metadata_list = cjson.empty_array
+    end
     return { packages = metadata_list }
 end
 
 -- Get routes for all packages
 function _M.get_routes()
-    local packages = utils.get_packages(_M.config.package_dir)
+    local packages, err = utils.get_packages(_M.config.package_dir)
     local routes_list = {}
+
+    if not packages then
+        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
+        return { routes = cjson.empty_array }
+    end
 
     for _, package in ipairs(packages) do
         local extract_path = _M.config.extract_dir .. "/" .. package.name
@@ -166,13 +180,22 @@ function _M.get_routes()
         end
     end
 
+    -- Ensure empty array is encoded as [] not {}
+    if #routes_list == 0 then
+        routes_list = cjson.empty_array
+    end
     return { routes = routes_list }
 end
 
 -- Get content hashes for all packages
 function _M.get_content_hashes()
-    local packages = utils.get_packages(_M.config.package_dir)
+    local packages, err = utils.get_packages(_M.config.package_dir)
     local hashes_list = {}
+
+    if not packages then
+        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
+        return { contentHashes = cjson.empty_array }
+    end
 
     for _, package in ipairs(packages) do
         local hash, err = utils.calculate_hash(package.path)
@@ -185,14 +208,23 @@ function _M.get_content_hashes()
         end
     end
 
+    -- Ensure empty array is encoded as [] not {}
+    if #hashes_list == 0 then
+        hashes_list = cjson.empty_array
+    end
     return { contentHashes = hashes_list }
 end
 
 -- Get content validity for all packages
 function _M.get_content_validity()
     local lfs = require "lfs"
-    local packages = utils.get_packages(_M.config.package_dir)
+    local packages, err = utils.get_packages(_M.config.package_dir)
     local validity_list = {}
+
+    if not packages then
+        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
+        return { contentValidity = cjson.empty_array }
+    end
 
     for _, package in ipairs(packages) do
         local extract_path = _M.config.extract_dir .. "/" .. package.name
@@ -216,6 +248,10 @@ function _M.get_content_validity()
         })
     end
 
+    -- Ensure empty array is encoded as [] not {}
+    if #validity_list == 0 then
+        validity_list = cjson.empty_array
+    end
     return { contentValidity = validity_list }
 end
 

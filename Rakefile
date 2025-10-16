@@ -64,6 +64,7 @@ namespace :docker do
           -p #{DOCKER_PORT} \
           -v #{Dir.pwd}/config:/etc/capsium \
           -v #{Dir.pwd}/lua/capsium:/etc/nginx/lua/capsium \
+          -v #{Dir.pwd}/lib/capsium:/usr/local/openresty/luajit/share/lua/5.1/capsium \
           -v #{Dir.pwd}/nginx/conf.d:/etc/nginx/conf.d \
           -v #{Dir.pwd}/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf \
           -v #{Dir.pwd}/spec/fixtures:/var/lib/capsium/packages \

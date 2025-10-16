@@ -5,6 +5,7 @@ return {
     lpath = "lib/?.lua;lib/?/init.lua",
   },
   default = {
+    ROOT = {"test/"},
     output = "gtest",
     pattern = "_spec%.lua$",
   },

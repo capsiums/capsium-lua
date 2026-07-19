@@ -18,7 +18,7 @@ local composite = require "capsium.package.composite"
 local csv = require "capsium.csv"
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 local _M_mt = { __index = _M }
 

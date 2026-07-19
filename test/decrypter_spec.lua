@@ -74,6 +74,12 @@ describe("capsium.package.decrypter (section 6b)", function()
   end)
 
   describe("decrypt_inner_zip", function()
+    if not crypto.available() then
+      pending("decrypt tests skipped: crypto backend unavailable",
+              function() end)
+      return
+    end
+
     local function setup(opts)
       opts = opts or {}
       local fs = MockFs.new({
@@ -157,6 +163,12 @@ describe("capsium.package.decrypter (section 6b)", function()
 
   describe("extractor integration (encrypted .cap -> normal extraction)",
     function()
+      if not crypto.available() then
+        pending("extractor decrypt tests skipped: crypto backend " ..
+                "unavailable", function() end)
+        return
+      end
+
       local inner_files = {
         { name = "metadata.json",
           content = '{"name":"enc-pkg","version":"1.0.0"}' },

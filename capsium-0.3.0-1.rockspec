@@ -1,5 +1,5 @@
 package = "capsium"
-version = "0.2.0-1"
+version = "0.3.0-1"
 
 source = {
    url = "git+https://github.com/capsiums/capsium-lua.git"
@@ -14,6 +14,11 @@ description = {
       Features:
       - Package layer for .cap file manipulation (canonical + legacy schemas)
       - SHA-256 integrity verification (security.json, reject on mismatch)
+      - RSA-SHA256 digital signature verification (section 6a)
+      - Encrypted packages: RSA-OAEP-SHA256 DEK + AES-256-GCM (section 6b)
+      - Layered storage with tombstones (section 5a)
+      - Composite packages: store resolution + route inheritance (section 4a)
+      - Authentication: basicAuth, OAuth2+PKCE, dataset accessControl (4b)
       - Manifest-driven route auto-generation
       - Reactor layer for HTTP serving with introspection API
       - Nginx/OpenResty adapter included

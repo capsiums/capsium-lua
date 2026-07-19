@@ -2,7 +2,7 @@
 -- Minimal RFC 4180-style CSV parser (framework-agnostic, pure functions)
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 
 -- Parse CSV text into an array of rows, each row an array of field strings.

@@ -5,6 +5,7 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
   local oauth2 = require "capsium.auth.oauth2"
   local access = require "capsium.auth.access"
   local utils = require "capsium.utils"
+  local crypto = require "capsium.crypto"
 
   -- Precomputed with the platform htpasswd tool (password: s3cret-Passw0rd!)
   local HTPASSWD = table.concat({
@@ -16,7 +17,17 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
     ""
   }, "\n")
 
-  describe("htpasswd", function()
+  -- htpasswd/basic/session need the crypto backend (digests, hmac, crypt)
+  local function describe_backend(name, fn)
+    if crypto.available() then
+      describe(name, fn)
+    else
+      pending(name .. " skipped: crypto backend unavailable",
+              function() end)
+    end
+  end
+
+  describe_backend("htpasswd", function()
     it("verifies apr1 (Apache MD5) entries", function()
       assert.is_true(htpasswd.verify(HTPASSWD, "admin", "s3cret-Passw0rd!"))
       assert.is_false(htpasswd.verify(HTPASSWD, "admin", "wrong"))
@@ -52,7 +63,7 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
     end)
   end)
 
-  describe("basic", function()
+  describe_backend("basic", function()
     local function header_for(user, pass)
       return "Basic " .. utils.base64_encode(user .. ":" .. pass)
     end
@@ -77,7 +88,7 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
     end)
   end)
 
-  describe("session", function()
+  describe_backend("session", function()
     local secret = "test-deploy-secret"
 
     it("round-trips a signed payload", function()
@@ -144,6 +155,11 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
 
     it("creates PKCE pairs whose challenge is the S256 of the verifier",
        function()
+      if not crypto.available() then
+        pending("crypto backend unavailable")
+        return
+      end
+
       local pkce = oauth2.new_pkce()
       assert.equals(43, #pkce.verifier)
 

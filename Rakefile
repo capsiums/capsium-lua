@@ -194,7 +194,7 @@ end
 
 # Combined workflow tasks
 desc "Run tests (ensures fixtures and container are ready)"
-task test: [:fixtures, 'docker:start', :spec]
+task test: [:fixtures, 'docker:restart', :spec]
 
 desc "CI workflow: fixtures, build, start, test, cleanup"
 task :ci do
@@ -203,7 +203,9 @@ task :ci do
     FileUtils.mkdir_p('tmp')
     Rake::Task[:fixtures].invoke
     Rake::Task['docker:build'].invoke
-    Rake::Task['docker:start'].invoke
+    # Restart (not start): a reused container serves stale Lua code and
+    # stale introspection cache entries after fixture/code rebuilds
+    Rake::Task['docker:restart'].invoke
     Rake::Task['spec:ci_report'].invoke
   ensure
     Rake::Task['docker:stop'].invoke

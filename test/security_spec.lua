@@ -127,6 +127,12 @@ describe("capsium.package.security", function()
   end)
 
   describe("verify with digital signatures (section 6a)", function()
+    if not crypto.available() then
+      pending("signature tests skipped: crypto backend unavailable",
+              function() end)
+      return
+    end
+
     it("accepts a correctly signed package", function()
       local key = generate_key()
       local tree = build_signed_tree(key)

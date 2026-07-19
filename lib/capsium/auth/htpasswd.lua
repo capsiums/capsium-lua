@@ -9,9 +9,11 @@
 --   matching what nginx auth_basic_user_file accepts there)
 --
 -- IO-free and framework-agnostic: the caller supplies the htpasswd file
--- content.
+-- content. The crypt(3) formats need LuaJIT's ffi (OpenResty, busted on
+-- LuaJIT); the module still loads without it, those formats just report
+-- no-match.
 
-local ffi = require "ffi"
+local ok_ffi, ffi = pcall(require, "ffi")
 
 local utils = require "capsium.utils"
 
@@ -19,9 +21,11 @@ local _M = {
   _VERSION = "0.3.0"
 }
 
-ffi.cdef[[
-  char *crypt(const char *key, const char *salt);
-]]
+if ok_ffi then
+  ffi.cdef[[
+    char *crypt(const char *key, const char *salt);
+  ]]
+end
 
 -- ---------------------------------------------------------------------------
 -- Digest helpers (resty.openssl, loaded like capsium.crypto)
@@ -149,7 +153,11 @@ function _M.verify_hash(password, stored)
 
   -- crypt(3) family: $2y$/$2b$/$2a$ (bcrypt), $1$ (md5), $5$ (sha256),
   -- $6$ (sha512); anything else is tried as traditional DES (salt is the
-  -- first two characters)
+  -- first two characters). Needs LuaJIT's ffi.
+  if not ok_ffi then
+    return false
+  end
+
   local ok, result = pcall(function()
     local computed = ffi.C.crypt(password, stored)
     if computed == nil then

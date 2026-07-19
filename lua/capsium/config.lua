@@ -246,10 +246,16 @@ local function path_matches(mount_path, uri)
 end
 
 -- Resolve the mount view for a request by Host and URI path prefix.
--- Returns mount_view, subpath or nil. /api/v1/introspect is reserved and
--- never matches a package mount.
+-- Returns mount_view, subpath or nil. /api/v1/introspect, /introspect
+-- and /package are reserved and never match a package mount.
 function _M.match_mount(config, host, uri)
   if uri:sub(1, 18) == "/api/v1/introspect" then
+    return nil
+  end
+  if uri == "/introspect" or uri:sub(1, 12) == "/introspect/" then
+    return nil
+  end
+  if uri == "/package" or uri:sub(1, 9) == "/package/" then
     return nil
   end
 

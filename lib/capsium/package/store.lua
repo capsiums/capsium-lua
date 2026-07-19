@@ -78,15 +78,18 @@ function _M:candidates()
   local zip = self.zip_adapter
   local candidates = {}
 
-  local entries = fs.list_dir(self.store_dir) or {}
+  -- A missing/unreadable store directory means no candidates (dependency
+  -- resolution then reports every dependency unsatisfiable)
+  local ok, entries = pcall(fs.list_dir, self.store_dir)
+  entries = ok and entries or {}
 
   -- Optional index: guid -> file name
   local index = {}
   local index_path = self.store_dir .. "/" .. INDEX_FILE
   local index_content = fs.read_file(index_path)
   if index_content then
-    local ok, raw = pcall(cjson.decode, index_content)
-    if ok and type(raw) == "table" then
+    local parsed_ok, raw = pcall(cjson.decode, index_content)
+    if parsed_ok and type(raw) == "table" then
       for guid, file in pairs(raw) do
         if type(guid) == "string" and type(file) == "string" then
           index[file] = guid

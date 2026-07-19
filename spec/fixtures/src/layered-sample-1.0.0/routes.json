@@ -1,0 +1,12 @@
+{
+  "index": "content/index.html",
+  "routes": [
+    { "path": "/", "resource": "content/index.html" },
+    { "path": "/index.html", "resource": "content/index.html" },
+    { "path": "/index", "resource": "content/index.html" },
+    { "path": "/base-only", "resource": "content/base-only.html" },
+    { "path": "/base-only.html", "resource": "content/base-only.html" },
+    { "path": "/deprecated", "resource": "content/deprecated.html" },
+    { "path": "/deprecated.html", "resource": "content/deprecated.html" }
+  ]
+}

@@ -15,6 +15,8 @@
 #   encrypted-sample-1.0.0.cap    encrypted layout (section 6b): metadata.json
 #                                 + signature.json envelope + package.enc
 #                                 (AES-256-GCM inner zip, RSA-OAEP-SHA256 DEK)
+#   layered-sample-1.0.0.cap      storage.layers base+updates (section 5a):
+#                                 top-wins override + .capsium-tombstones 404
 #
 # Keys (test-only, regenerated each run) land in spec/fixtures/keys/:
 #   private.pem/public.pem              signing + encryption recipient
@@ -35,11 +37,12 @@ FIXTURES_DIR = __dir__
 SRC_DIR = File.join(FIXTURES_DIR, 'src')
 
 # Recursively collect files under dir as relative POSIX paths, skipping
-# dotfiles (.DS_Store and friends).
+# dotfiles (.DS_Store and friends). The .capsium-tombstones dotfile is a
+# package artifact (section 5a) and is kept.
 def collect_files(dir, prefix = '')
   files = []
   Dir.entries(dir).sort.each do |entry|
-    next if entry.start_with?('.')
+    next if entry.start_with?('.') && entry != '.capsium-tombstones'
 
     path = File.join(dir, entry)
     rel = prefix.empty? ? entry : "#{prefix}/#{entry}"
@@ -260,3 +263,5 @@ File.write(File.join(KEYS_DIR, 'other-private.pem'), other_key.to_pem)
 File.write(File.join(KEYS_DIR, 'other-public.pem'), other_key.public_key.to_pem)
 
 build_encrypted('encrypted-sample-1.0.0', signing_key.public_key)
+
+build('layered-sample-1.0.0', with_security: true)

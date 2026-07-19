@@ -10,6 +10,7 @@
 local Package = require "capsium.package.package"
 local Extractor = require "capsium.package.extractor"
 local Store = require "capsium.package.store"
+local decrypter = require "capsium.package.decrypter"
 local utils = require "capsium.utils"
 
 local _M = {
@@ -356,34 +357,63 @@ function _M:content_hashes_report()
   return { contentHashes = list }
 end
 
--- { contentValidity = [{ package, valid, lastChecked, reason? }] }
--- Reports the actual integrity verification result per package.
+-- { contentValidity = [{ package, valid, lastChecked, reason?,
+--                        signed?, encrypted, signatureValid? }] }
+-- Reports the actual integrity verification result per package. `signed`
+-- and `signatureValid` describe the section-6a signature gate (the latter
+-- only appears for signed packages); `encrypted` records whether the
+-- source .cap uses the section-6b encrypted layout. Packages that fail to
+-- load report valid=false with the reason (signed is then unknown).
 function _M:content_validity_report()
   local list = {}
   local now = utils.format_timestamp(os.time())
 
   for _, info in ipairs(self:list_packages()) do
     local package, err = self:get_package(info.name)
+    local entry = {
+      package = info.name,
+      lastChecked = now,
+      encrypted = self:is_encrypted_package(info.path)
+    }
 
     if not package then
-      table.insert(list, {
-        package = info.name,
-        valid = false,
-        lastChecked = now,
-        reason = err
-      })
+      entry.valid = false
+      entry.reason = err
     else
       local valid, reason = package:verify_integrity()
-      table.insert(list, {
-        package = info.name,
-        valid = valid and true or false,
-        lastChecked = now,
-        reason = reason
-      })
+      -- Entries are keyed by the package's metadata name (the loadable
+      -- identity), not the .cap filename — parity with the Ruby reactor
+      local metadata = package:get_metadata()
+      entry.package = metadata and metadata.name or info.name
+      entry.valid = valid and true or false
+      entry.reason = reason
+      entry.signed = package:is_signed()
+      if entry.signed then
+        entry.signatureValid = package:verify_signature()
+      end
     end
+
+    table.insert(list, entry)
   end
 
   return { contentValidity = list }
+end
+
+-- True when a .cap file uses the encrypted layout (section 6b: it
+-- contains package.enc). Detection works on the zip listing, so it also
+-- applies to packages that cannot be decrypted (no key configured).
+function _M:is_encrypted_package(package_path)
+  local zip = self.zip_adapter
+
+  local zfile = zip.open(package_path)
+  if not zfile then
+    return false
+  end
+
+  local files = zip.list_files(zfile)
+  zip.close(zfile)
+
+  return files ~= nil and decrypter.is_encrypted_listing(files)
 end
 
 -- ---------------------------------------------------------------------------

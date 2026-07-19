@@ -1,0 +1,47 @@
+name: conformance
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Mondays 06:00 UTC
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  # The conformance classes this reactor claims (see README badges).
+  CONFORMANCE_CLASSES: core-reactor,signatures,encryption,layered-storage,composite,authentication
+
+jobs:
+  conformance:
+    name: Capsium conformance kit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout capsium-lua
+        uses: actions/checkout@v4
+
+      - name: Checkout the conformance kit
+        uses: actions/checkout@v4
+        with:
+          repository: capsiums/capsium-conformance
+          path: capsium-conformance
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+          working-directory: capsium-conformance
+
+      # Docker is available on the runners; the adapter builds the reactor
+      # image from this checkout and runs one container per fixture.
+      - name: Run the conformance kit
+        working-directory: capsium-conformance
+        env:
+          CONFORMANCE_ADAPTER: ${{ github.workspace }}/harness/conformance_reactor_adapter.rb
+        run: bundle exec rspec

@@ -44,7 +44,7 @@ RSpec.describe 'Cold-start introspection' do
     data = parse_json(response)
 
     entry = data['contentValidity'].find do |v|
-      v['package'] == 'dormant-package-0.1.0'
+      v['package'] == 'dormant-package'
     end
 
     expect(entry).not_to be_nil

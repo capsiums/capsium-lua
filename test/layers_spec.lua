@@ -83,6 +83,9 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
   end)
 
   describe("Package layered resolution", function()
+    -- Canonical section-5a layout: each layer mirrors the content/ tree
+    -- (layer files are content/-relative); content/ itself is the
+    -- implicit bottom layer.
     local function build_package(extra_files, storage_layers)
       local files = {
         ["/pkg/metadata.json"] =
@@ -93,13 +96,15 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
             { path = "/", resource = "content/index.html" },
             { path = "/index.html", resource = "content/index.html" },
             { path = "/base-only", resource = "content/base-only.html" },
-            { path = "/deprecated", resource = "content/deprecated.html" }
+            { path = "/deprecated", resource = "content/deprecated.html" },
+            { path = "/local", resource = "content/local.html" }
           }
         }),
-        ["/pkg/base/content/index.html"] = "<h1>base index</h1>",
-        ["/pkg/base/content/base-only.html"] = "<h1>base only</h1>",
-        ["/pkg/base/content/deprecated.html"] = "<h1>deprecated</h1>",
-        ["/pkg/updates/content/index.html"] = "<h1>updated index</h1>"
+        ["/pkg/content/local.html"] = "<h1>local</h1>",
+        ["/pkg/base/index.html"] = "<h1>base index</h1>",
+        ["/pkg/base/base-only.html"] = "<h1>base only</h1>",
+        ["/pkg/base/deprecated.html"] = "<h1>deprecated</h1>",
+        ["/pkg/updates/index.html"] = "<h1>updated index</h1>"
       }
       for path, content in pairs(extra_files or {}) do
         files[path] = content
@@ -127,14 +132,21 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
       local target = assert(package:resolve("/"))
 
       assert.equals("static", target.kind)
-      assert.is_truthy(target.path:find("updates/content/index%.html$"))
+      assert.is_truthy(target.path:find("updates/index%.html$"))
     end)
 
     it("falls through to lower layers for files only they have", function()
       local package = build_package()
       local target = assert(package:resolve("/base-only"))
 
-      assert.is_truthy(target.path:find("base/content/base%-only%.html$"))
+      assert.is_truthy(target.path:find("base/base%-only%.html$"))
+    end)
+
+    it("serves files of the implicit content/ layer", function()
+      local package = build_package()
+      local target = assert(package:resolve("/local"))
+
+      assert.is_truthy(target.path:find("content/local%.html$"))
     end)
 
     it("resolves 404 for files in no layer", function()
@@ -148,8 +160,7 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
     it("treats tombstoned paths as deleted even when a lower layer has them",
        function()
       local package = build_package({
-        ["/pkg/updates/.capsium-tombstones"] =
-          '["content/deprecated.html"]'
+        ["/pkg/updates/.capsium-tombstones"] = '["deprecated.html"]'
       })
 
       local target, err = package:resolve("/deprecated")
@@ -160,12 +171,11 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
     it("serves non-tombstoned lower files when a tombstone list exists",
        function()
       local package = build_package({
-        ["/pkg/updates/.capsium-tombstones"] =
-          '["content/deprecated.html"]'
+        ["/pkg/updates/.capsium-tombstones"] = '["deprecated.html"]'
       })
 
       local target = assert(package:resolve("/base-only"))
-      assert.is_truthy(target.path:find("base/content/"))
+      assert.is_truthy(target.path:find("base/"))
     end)
 
     it("lets a file sharing a layer with its tombstone win", function()
@@ -173,19 +183,18 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
       -- file: descending, the file is found in that layer before the
       -- tombstone can mask lower layers
       local package = build_package({
-        ["/pkg/base/.capsium-tombstones"] = '["content/deprecated.html"]'
+        ["/pkg/base/.capsium-tombstones"] = '["deprecated.html"]'
       })
 
       local target = assert(package:resolve("/deprecated"))
-      assert.is_truthy(target.path:find("base/content/deprecated%.html$"))
+      assert.is_truthy(target.path:find("base/deprecated%.html$"))
     end)
 
     it("honors tombstones in any layer, masking lower layers", function()
       -- 3 layers; the tombstone in the MIDDLE layer masks the bottom one
       local files = {
-        ["/pkg/middle/.capsium-tombstones"] =
-          '["content/deprecated.html"]',
-        ["/pkg/middle/content/index.html"] = "<h1>middle</h1>"
+        ["/pkg/middle/.capsium-tombstones"] = '["deprecated.html"]',
+        ["/pkg/middle/index.html"] = "<h1>middle</h1>"
       }
       local package = build_package(files, {
         { path = "base", writable = false, visibility = "exported" },
@@ -199,7 +208,7 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
 
       -- and unrelated lower files still serve
       local ok = assert(package:resolve("/base-only"))
-      assert.is_truthy(ok.path:find("base/content/"))
+      assert.is_truthy(ok.path:find("base/"))
     end)
 
     it("ignores a malformed tombstone file", function()
@@ -208,7 +217,7 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
       })
 
       local target = assert(package:resolve("/deprecated"))
-      assert.is_truthy(target.path:find("base/content/deprecated%.html$"))
+      assert.is_truthy(target.path:find("base/deprecated%.html$"))
     end)
 
     it("exposes the parsed layers with visibility", function()

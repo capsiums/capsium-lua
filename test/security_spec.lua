@@ -253,5 +253,36 @@ describe("capsium.package.security", function()
       assert.is_true(ok)
       assert.is_nil(reason)
     end)
+
+    it("tolerates unlisted dotfiles (.htpasswd, .capsium-tombstones)",
+       function()
+      local files = {
+        ["/pkg/metadata.json"] = '{"name":"plain","version":"1.0.0"}',
+        ["/pkg/content/index.html"] = "<h1>plain</h1>",
+        -- Dotfiles are never checksum-covered, so the unlisted-file
+        -- check must skip them (and dot-directories entirely)
+        ["/pkg/auth/.htpasswd"] = "alice:$apr1$xx$yy",
+        ["/pkg/updates/.capsium-tombstones"] = '["old.txt"]',
+        ["/pkg/.hidden"] = "secret"
+      }
+      local checksums = {
+        ["metadata.json"] = hash.sha256_hex(files["/pkg/metadata.json"]),
+        ["content/index.html"] =
+          hash.sha256_hex(files["/pkg/content/index.html"])
+      }
+      files["/pkg/security.json"] = cjson.encode({
+        security = {
+          integrityChecks = {
+            checksumAlgorithm = "SHA-256",
+            checksums = checksums
+          }
+        }
+      })
+
+      local fs = MockFs.new(files)
+      local ok, reason = security.verify("/pkg", fs, mock_hash_fn(fs))
+      assert.is_true(ok)
+      assert.is_nil(reason)
+    end)
   end)
 end)

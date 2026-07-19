@@ -266,6 +266,29 @@ local function read_htpasswd(package, passwd_file)
   return fs.read_file(path, "rb")
 end
 
+-- Union deploy-time role assignments for a subject into a roles array
+-- (returns a new array; deploy roles never remove granted ones).
+local function with_deploy_roles(roles, deploy, subject)
+  local assigned = deploy and deploy.roles and deploy.roles[subject]
+  if type(assigned) ~= "table" then
+    return roles
+  end
+
+  local merged = {}
+  local seen = {}
+  for _, role in ipairs(roles or {}) do
+    merged[#merged + 1] = role
+    seen[role] = true
+  end
+  for _, role in ipairs(assigned) do
+    if not seen[role] then
+      merged[#merged + 1] = role
+      seen[role] = true
+    end
+  end
+  return merged
+end
+
 -- Establish the request principal for a package with authentication.
 --   package:  the loaded Package (authentication.json already parsed)
 --   mount:    the matched mount view
@@ -302,7 +325,8 @@ function _M.gate(package, mount, subpath, deploy)
         return nil
       end
 
-      local principal = basic_auth.authenticate(header, htpasswd_content)
+      local principal = basic_auth.authenticate(header, htpasswd_content,
+                                                deploy and deploy.roles)
       if principal then
         return principal
       end
@@ -320,7 +344,8 @@ function _M.gate(package, mount, subpath, deploy)
       return {
         subject = payload.subject,
         email = payload.email,
-        roles = payload.roles or {},
+        roles = with_deploy_roles(payload.roles or {}, deploy,
+                                  payload.subject),
         method = "oauth2",
         provider = payload.provider
       }

@@ -2,6 +2,7 @@ describe("Capsium Package model", function()
   local Package = require "capsium.package.package"
   local MockFs = require "mock_fs"
   local hash = require "capsium.adapters.hash"
+  local cjson = require "cjson"
 
   local function mock_hash_fn(fs)
     return function(path)
@@ -15,7 +16,6 @@ describe("Capsium Package model", function()
 
   -- Build a security.json string covering every file in the mock tree.
   local function build_security(fs, prefix)
-    local cjson = require "cjson"
     local checksums = {}
 
     local function scan(dir, rel_prefix)
@@ -225,7 +225,9 @@ describe("Capsium Package model", function()
         '"sqlite_ds":{"databaseFile":"data/d.db","table":"t"}}}}',
       ["/dpkg/data/a.json"] = '{"ok":true}',
       ["/dpkg/data/b.csv"] = "name,legs\ncat,4\n",
-      ["/dpkg/data/c.yaml"] = "name: cat\n"
+      ["/dpkg/data/c.yaml"] = "animals:\n" ..
+        "  - name: \"Lion\"\n    legs: 4\n" ..
+        "  - name: \"Eagle\"\n    legs: 2\n"
     })
     local package = Package.new("/dpkg", { fs_adapter = fs })
     assert.is_true(package:load())
@@ -243,10 +245,12 @@ describe("Capsium Package model", function()
       assert.equals("4", data[1].legs)
     end)
 
-    it("rejects YAML datasets (not supported by this reactor)", function()
-      local data, err = package:get_dataset("yaml_ds")
-      assert.is_nil(data)
-      assert.is_truthy(tostring(err):find("Unsupported"))
+    it("loads YAML datasets (block-style subset)", function()
+      local data, format = package:get_dataset("yaml_ds")
+      assert.equals("yaml", format)
+      assert.equals("Lion", data.animals[1].name)
+      assert.equals(4, data.animals[1].legs)
+      assert.equals("Eagle", data.animals[2].name)
     end)
 
     it("rejects SQLite datasets (not supported by this reactor)", function()
@@ -358,6 +362,35 @@ describe("Capsium Package model", function()
       local valid = package:verify_integrity()
       assert.is_true(valid)
       assert.is_false(package:has_security())
+    end)
+
+    it("reports signed state from the declared digitalSignatures", function()
+      local unsigned_fs = secured_package()
+      local unsigned = Package.new("/spkg", {
+        fs_adapter = unsigned_fs,
+        hash_fn = mock_hash_fn(unsigned_fs)
+      })
+      assert.is_false(unsigned:is_signed())
+      assert.is_nil(unsigned:verify_signature())
+
+      -- Declared but unverifiable signature (bogus public key): signed,
+      -- but signatureValid is false
+      local fs = secured_package()
+      local record = cjson.decode(fs:read_file("/spkg/security.json"))
+      record.security.digitalSignatures = {
+        publicKey = "signature.pub.pem",
+        signatureFile = "signature.sig"
+      }
+      fs:write_file("/spkg/security.json", cjson.encode(record))
+      fs:write_file("/spkg/signature.pub.pem", "not a pem")
+      fs:write_file("/spkg/signature.sig", "not a signature")
+
+      local signed = Package.new("/spkg", {
+        fs_adapter = fs,
+        hash_fn = mock_hash_fn(fs)
+      })
+      assert.is_true(signed:is_signed())
+      assert.is_false(signed:verify_signature())
     end)
   end)
 end)

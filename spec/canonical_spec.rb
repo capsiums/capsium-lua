@@ -85,7 +85,7 @@ RSpec.describe 'Canonical-format package' do
       data = parse_json(response)
 
       entry = data['contentValidity'].find do |e|
-        e['package'] == 'canonical-sample-1.0.0'
+        e['package'] == 'canonical-sample'
       end
 
       expect(entry).not_to be_nil

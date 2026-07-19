@@ -203,7 +203,10 @@ end
 -- Normalize the deploy-time authentication config (section 4b: secrets
 -- come from the deployment, never from the package):
 --   { "sessionSecret": "...", "sessionTtl": 3600,
---     "oauth2": { "clientSecret": "..." } }
+--     "oauth2": { "clientSecret": "..." },
+--     "roles": { "alice": ["admin", ...] } }
+-- "roles" assigns deploy-time roles to basic-auth usernames (htpasswd has
+-- no role concept) and OAuth2 subjects (unioned with userinfo roles).
 -- Environment overrides: CAPSIUM_SESSION_SECRET, OAUTH_CLIENT_SECRET.
 function _M.normalize_authentication(raw)
   raw = type(raw) == "table" and raw or {}
@@ -227,10 +230,27 @@ function _M.normalize_authentication(raw)
 
   local ttl = tonumber(raw.sessionTtl or raw.session_ttl) or 3600
 
+  local roles = nil
+  if type(raw.roles) == "table" then
+    roles = {}
+    for subject, assigned in pairs(raw.roles) do
+      if type(subject) == "string" and type(assigned) == "table" then
+        local list = {}
+        for _, role in ipairs(assigned) do
+          if type(role) == "string" then
+            list[#list + 1] = role
+          end
+        end
+        roles[subject] = list
+      end
+    end
+  end
+
   return {
     session_secret = session_secret,
     session_ttl = ttl,
-    oauth2_client_secret = client_secret
+    oauth2_client_secret = client_secret,
+    roles = roles
   }
 end
 

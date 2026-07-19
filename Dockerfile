@@ -25,6 +25,7 @@ RUN cd /tmp && luarocks make capsium-0.3.0-1.rockspec && rm -rf /tmp/*
 RUN mkdir -p /var/lib/capsium/packages && \
     mkdir -p /var/lib/capsium/extracted && \
     mkdir -p /var/lib/capsium/static && \
+    mkdir -p /var/lib/capsium/store && \
     mkdir -p /var/log/nginx && \
     chown -R nobody:nobody /var/lib/capsium && \
     chown -R nobody:nobody /var/log/nginx

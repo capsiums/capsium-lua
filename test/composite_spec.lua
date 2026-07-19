@@ -154,6 +154,19 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
       assert.is_truthy(err:find("vendor%-core"))
       assert.is_truthy(err:find("missing"))
     end)
+
+    it("treats a missing store directory as empty candidates", function()
+      local store = Store.new({
+        store_dir = "/no/such/dir",
+        fs_adapter = MockFs.new({}),
+        zip_adapter = MockZip.new({})
+      })
+
+      assert.same({}, store:candidates())
+      local plan, err = store:plan({ ["capsium://fixtures/x"] = "*" })
+      assert.is_nil(plan)
+      assert.is_truthy(err:find("unsatisfiable"))
+    end)
   end)
 
   describe("reactor with a package store", function()

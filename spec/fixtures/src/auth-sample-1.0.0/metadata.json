@@ -1,0 +1,10 @@
+{
+  "name": "auth-sample",
+  "version": "1.0.0",
+  "description": "Basic-auth Capsium sample package (section 4b)",
+  "guid": "https://github.com/capsiums/capsium-lua/auth-sample",
+  "uuid": "723e4567-e89b-12d3-a456-426614174006",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

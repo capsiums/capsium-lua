@@ -29,7 +29,8 @@ dependencies = {
    "luafilesystem >= 1.8.0",
    "lua-cjson >= 2.1.0",
    "lua-zip >= 0.2",
-   "lua-resty-openssl >= 1.3"
+   "lua-resty-openssl >= 1.3",
+   "lua-resty-http >= 0.17"
 }
 
 build = {
@@ -53,6 +54,13 @@ build = {
       ["capsium.package.store"] = "lib/capsium/package/store.lua",
       ["capsium.package.router"] = "lib/capsium/package/router.lua",
       ["capsium.package.security"] = "lib/capsium/package/security.lua",
+
+      -- Authentication (section 4b)
+      ["capsium.auth.htpasswd"] = "lib/capsium/auth/htpasswd.lua",
+      ["capsium.auth.basic"] = "lib/capsium/auth/basic.lua",
+      ["capsium.auth.session"] = "lib/capsium/auth/session.lua",
+      ["capsium.auth.oauth2"] = "lib/capsium/auth/oauth2.lua",
+      ["capsium.auth.access"] = "lib/capsium/auth/access.lua",
 
       -- Adapters
       ["capsium.adapters.nginx"] = "lib/capsium/adapters/nginx.lua",

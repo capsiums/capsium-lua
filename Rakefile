@@ -89,6 +89,7 @@ namespace :docker do
       sh <<~SH
         docker run -d --name #{CONTAINER_NAME} \
           -p #{DOCKER_PORT} \
+          --add-host host.docker.internal:host-gateway \
           -v #{Dir.pwd}/config:/etc/capsium \
           -v #{Dir.pwd}/lua/capsium:/etc/nginx/lua/capsium \
           -v #{Dir.pwd}/lib/capsium:/usr/local/openresty/luajit/share/lua/5.1/capsium \

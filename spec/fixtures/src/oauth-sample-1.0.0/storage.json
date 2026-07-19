@@ -1,0 +1,12 @@
+{
+  "storage": {
+    "dataSets": {
+      "reader-data": {
+        "source": "data/reader.json"
+      },
+      "admin-data": {
+        "source": "data/admin.json"
+      }
+    }
+  }
+}

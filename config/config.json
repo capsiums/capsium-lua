@@ -7,6 +7,12 @@
   "encryption": {
     "privateKeyPath": "/var/lib/capsium/packages/keys/private.pem"
   },
+  "authentication": {
+    "sessionSecret": "integration-test-session-secret",
+    "oauth2": {
+      "clientSecret": "mock-client-secret"
+    }
+  },
   "mounts": [
     {
       "package": "mn-samples-iso-0.1.0.cap",
@@ -67,6 +73,14 @@
     {
       "package": "composite-sample-1.0.0.cap",
       "path": "/composite"
+    },
+    {
+      "package": "auth-sample-1.0.0.cap",
+      "path": "/auth-basic"
+    },
+    {
+      "package": "oauth-sample-1.0.0.cap",
+      "path": "/oauth-app"
     }
   ]
 }

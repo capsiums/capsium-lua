@@ -1,0 +1,17 @@
+{
+  "index": "content/index.html",
+  "routes": [
+    { "path": "/", "resource": "content/index.html" },
+    { "path": "/index.html", "resource": "content/index.html" },
+    {
+      "path": "/api/v1/data/reader-data",
+      "dataset": "reader-data",
+      "accessControl": { "authenticationRequired": true, "roles": ["reader"] }
+    },
+    {
+      "path": "/api/v1/data/admin-data",
+      "dataset": "admin-data",
+      "accessControl": { "authenticationRequired": true, "roles": ["admin"] }
+    }
+  ]
+}

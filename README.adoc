@@ -23,6 +23,24 @@ thin Nginx glue layer (`lua/capsium`); no duplicated logic
 * *Integrity verification* — SHA-256 checksums from `security.json` are
 verified at extraction; tampered packages are rejected with 5xx and reported
 by `content-validity`
+* *Digital signatures (§6a)* — when `security.json` declares
+`digitalSignatures`, the RSA-SHA256 signature is verified against the
+canonical signed payload at extraction; non-matching packages are rejected
+* *Encrypted packages (§6b)* — the `metadata.json` + `signature.json` +
+`package.enc` layout is detected at extraction; the RSA-OAEP-SHA256-wrapped
+DEK is unwrapped with a configured private key and the inner zip is
+AES-256-GCM-decrypted, then handled like a plaintext package
+* *Layered storage (§5a)* — `storage.layers` overlay semantics: top-to-bottom
+first-hit resolution, `.capsium-tombstones` deletions resolve 404, private
+layers hidden from dependent packages (serving is read-only)
+* *Composite packages (§4a)* — `metadata.dependencies` resolve against a
+package store (newest satisfying semver); dependency content mounts
+read-only with exported-only visibility; route inheritance honors `remap`,
+`responseRewrite` (body/headers), `responseHeaders`, `requestHeaders`
+* *Authentication (§4b)* — `authentication.json` basicAuth (htpasswd:
+apr1/{SHA}/bcrypt/crypt) and OAuth2 authorization-code + PKCE against
+configurable endpoints with signed-cookie sessions; dataset-route
+`accessControl` maps to 401/403
 * *Manifest-driven routing* — routes are auto-generated from `manifest.json`
 per the Capsium routing rules (dual HTML routes, index, dataset routes)
 * *Canonical + legacy schemas* — metadata, manifest, routes, storage and
@@ -42,15 +60,30 @@ extract and load packages on demand
 [source]
 ----
 lib/capsium/                  Framework-agnostic core (the rock)
-├── utils.lua                 Pure helpers (tables, JSON files, paths)
+├── utils.lua                 Pure helpers (tables, JSON files, base64)
 ├── mime.lua                  MIME type detection (text/javascript per RFC 9239)
 ├── csv.lua                   Minimal CSV parser (dataset support)
+├── crypto.lua                Crypto facade (lua-resty-openssl): RSA-SHA256
+│                             verify, RSA-OAEP-SHA256 unwrap, AES-256-GCM
+├── semver.lua                Semver comparison + range matching (§4a)
 ├── reactor.lua               Reactor core: package management + introspection
 ├── package/
-│   ├── package.lua           Package model (OOP): load/normalize/resolve
-│   ├── extractor.lua         Atomic .cap extraction (tmp dir + rename)
+│   ├── package.lua           Package model (OOP): load/normalize/resolve,
+│   │                         layers + tombstones, dependency refs
+│   ├── extractor.lua         Atomic .cap extraction (tmp dir + rename),
+│   │                         encrypted-package decryption
+│   ├── decrypter.lua         §6b envelope parsing + DEK unwrap + GCM decrypt
+│   ├── composite.lua         §4a capsium:// refs + response processing
+│   ├── store.lua             Package store scan + dependency resolution
 │   ├── router.lua            Schema normalization + route auto-generation
-│   └── security.lua          security.json parsing + SHA-256 verification
+│   └── security.lua          security.json parsing + SHA-256 + signature
+│                             verification
+├── auth/
+│   ├── htpasswd.lua          htpasswd verification (apr1/{SHA}/crypt/bcrypt)
+│   ├── basic.lua             HTTP Basic scheme
+│   ├── session.lua           HMAC-SHA256 signed session cookies
+│   ├── oauth2.lua            OAuth2 authorization-code + PKCE flow logic
+│   └── access.lua            Dataset accessControl evaluation (401/403)
 └── adapters/
     ├── nginx.lua             fs/zip adapters (LuaFileSystem + lua-zip)
     └── hash.lua              SHA-256 (resty.sha256 in OpenResty,
@@ -59,11 +92,24 @@ lib/capsium/                  Framework-agnostic core (the rock)
 lua/capsium/                  Nginx glue (only code that touches ngx)
 ├── init.lua                  Entry point: wires adapters into the core,
 │                             request handling, introspection API
-└── config.lua                config.json loading + mount resolution
+├── config.lua                config.json loading + mount resolution
+└── auth_gate.lua             §4b glue: challenges, OAuth2 redirects +
+                              callbacks, session cookies, resty.http
 ----
 
 The core never references `ngx`; the glue never implements domain logic.
 Other platforms can plug in their own fs/zip/hash adapters.
+
+.Crypto backend
+[NOTE]
+====
+All RSA/AES operations go through `lua-resty-openssl` (FFI to the OpenSSL 3
+`libcrypto` shipped in the pinned image — there is no `openssl` binary in
+it, and `openssl enc` could not do AES-GCM anyway). Inside nginx workers
+the symbols are already global; the Dockerfile symlinks
+`libcrypto.so`/`libssl.so` so plain LuaJIT (busted) resolves them too.
+`resty.openssl.version` is always required first (it performs the load).
+====
 
 .Request flow
 [source]
@@ -75,9 +121,16 @@ generic location /  ──►  capsium.handle_request()
      │                     ├─ resolve mount (Host + path prefix from config)
      │                     ├─ method check (GET/HEAD; OPTIONS w/ CORS)
      │                     ├─ reactor:get_package(name)
-     │                     │    ├─ extract .cap (atomic, verify SHA-256)
-     │                     │    └─ load package (metadata/manifest/routes/storage)
+     │                     │    ├─ decrypt (§6b, when encrypted + key configured)
+     │                     │    ├─ extract .cap (atomic, verify SHA-256 + signature)
+     │                     │    ├─ load package (metadata/manifest/routes/storage)
+     │                     │    └─ resolve + mount dependencies (§4a store)
+     │                     ├─ auth gate (§4b: basicAuth / OAuth2, when
+     │                     │    authentication.json enables it)
      │                     ├─ package:resolve(subpath)
+     │                     │    ├─ storage layers top→bottom, tombstones 404
+     │                     │    └─ capsium:// dependency refs, exported only
+     │                     ├─ dataset accessControl → 401/403
      │                     └─ serve static file / dataset JSON
      ▼
 location /api/v1/introspect ──► capsium.handle_introspection()
@@ -107,6 +160,167 @@ objects). YAML and SQLite datasets are not supported by this reactor
 * `security.json` — when present, every listed file's SHA-256 is verified
 at extraction; the package is *rejected* on mismatch (5xx with reason).
 `content-validity` reports the verification result
+
+== Digital signatures (§6a)
+
+When `security.json` declares `digitalSignatures`:
+
+[source,json]
+----
+{ "security": {
+    "integrityChecks": { "checksumAlgorithm": "SHA-256", "checksums": {} },
+    "digitalSignatures": { "publicKey": "signature.pub.pem",
+                           "signatureFile": "signature.sig" } } }
+----
+
+the reactor verifies `signature.sig` at extraction: the signed payload is
+the concatenation, in sorted checksum-key order, of the bytes of every
+checksum-covered file (identical construction to the Ruby gem and the
+standard, so `openssl dgst -sha256 -verify` agrees). The embedded public
+key (or X.509 certificate) travels inside the package and is itself
+covered by the checksums. Packages with a declared but non-matching
+signature are rejected, same gate as checksums; `content-validity`
+reports the signature result.
+
+== Encrypted packages (§6b)
+
+An encrypted `.cap` is a zip containing `metadata.json` (cleartext),
+`signature.json` (the encryption envelope) and `package.enc` (the
+AES-256-GCM ciphertext of the inner, plaintext `.cap`). When the layout
+is detected at extraction, the reactor unwraps the RSA-OAEP-SHA256
+(MGF1-SHA256) data-encryption key with the configured private key,
+decrypts the inner zip, and proceeds exactly as with a plaintext package
+(integrity and signature verification included).
+
+The key is configured reactor-wide and/or per mount:
+
+[source,json]
+----
+{
+  "encryption": { "privateKeyPath": "/etc/capsium/keys/private.pem" },
+  "mounts": [
+    { "package": "secret-1.0.0.cap", "path": "/secret",
+      "options": { "encryption": { "privateKeyPath": "/keys/other.pem" } } }
+  ]
+}
+----
+
+With no key configured (or an unreadable/wrong key), the package is
+rejected with a clear 5xx reason. Extraction caching carries the key
+identity: a package is never served from an extraction produced under a
+different key (change the key and the package is re-decrypted on the next
+request).
+
+== Layered storage (§5a)
+
+`storage.layers` (bottom → top) overlays package-relative directories
+onto the content tree:
+
+[source,json]
+----
+{ "storage": { "layers": [
+    { "path": "base",    "writable": false, "visibility": "exported" },
+    { "path": "updates", "writable": true,  "visibility": "private" } ] } }
+----
+
+* Requests resolve against the layers *top → bottom*; the first hit wins
+(so `updates/content/index.html` shadows `base/content/index.html`).
+Without a `layers` config the package root is the single implicit layer.
+* Deletions are tombstones: a JSON array of merged-view paths in a
+layer's `.capsium-tombstones` file. A path tombstoned at or above the
+first serving layer resolves 404 (a file sharing a layer with its
+tombstone still wins).
+* `visibility: private` layers are not exposed to dependent packages
+(see composite packages).
+* Serving is read-only: no write API yet.
+
+== Composite packages (§4a)
+
+`metadata.dependencies` maps a dependency GUID to a semver range:
+
+[source,json]
+----
+{ "dependencies": { "capsium://example.com/vendor-core": ">=1.0.0" } }
+----
+
+On activation, each dependency resolves against the *package store* —
+a directory (`store_dir`, default `/var/lib/capsium/store`, overridable
+via `CAPSIUM_STORE`) of `<name>-<version>.cap` files plus an optional
+`index.json` (guid → file). The newest satisfying version wins
+(exact/wildcard/comparator/caret/tilde ranges, AND-ed lists; `*` matches
+any). Dependencies are extracted (with full integrity verification) and
+mounted recursively; cycles and unsatisfiable ranges fail the package
+with a clear reason.
+
+Dependency content is reachable through `capsium://` route references
+(route inheritance per 05x-routing):
+
+[source,json]
+----
+{ "path": "/vendor/app.js",
+  "resource": "capsium://example.com/vendor-core/content/app.js" }
+----
+
+* Only `exported` manifest resources are visible; referencing a
+`private` resource of a dependency is an error, and private layers (§5a)
+are invisible to dependents.
+* `remap` is the effective served path (the original path stops
+matching).
+* `responseHeaders` are added only when absent;
+`responseRewrite.headers` override; `responseRewrite.body` replaces the
+served body.
+* `requestHeaders` are accepted and ignored for static resources — they
+only take effect when forwarding to dynamic handler routes, which this
+reactor answers `501` (§4a handler contract).
+
+== Authentication (§4b)
+
+A package ships `authentication.json`:
+
+[source,json]
+----
+{ "authentication": {
+    "basicAuth": { "enabled": true, "passwdFile": "auth/.htpasswd",
+                   "realm": "capsium" },
+    "oauth2": { "enabled": true, "provider": "google",
+                "clientId": "...",
+                "authorizationUrl": "https://.../authorize",
+                "tokenUrl": "https://.../token",
+                "userinfoUrl": "https://.../userinfo",
+                "redirectPath": "/auth/callback",
+                "scopes": ["openid", "email"] } } }
+----
+
+When any method is enabled, every package route requires authentication
+(introspection stays open).
+
+*Basic auth* is verified Lua-side against the htpasswd file (the
+config-driven architecture mounts everything through one generic
+location, so per-location `auth_basic` directives cannot express it —
+the check matches what `auth_basic_user_file` accepts on this platform).
+Supported hash formats: `$apr1$` (Apache MD5, htpasswd default),
+`{SHA}`, and the `crypt(3)` family (`$2y$`/`$2b$` bcrypt, `$1$`, `$5$`,
+`$6$`, DES). `passwdFile` is package-relative or absolute. Missing or
+invalid credentials get `401` + `WWW-Authenticate`.
+
+*OAuth2* implements the authorization-code flow with PKCE (S256) against
+the configured endpoints: unauthenticated requests redirect to the
+provider with state + verifier in a signed short-lived cookie (no
+server-side state — any worker can complete the flow); the callback
+verifies state, exchanges the code (`resty.http`), fetches userinfo and
+sets an HMAC-SHA256 signed session cookie. *Secrets come from the
+deployment, never the package*: `authentication.sessionSecret` and
+`authentication.oauth2.clientSecret` in `config.json`, overridable via
+`CAPSIUM_SESSION_SECRET` / `OAUTH_CLIENT_SECRET`. `sessionTtl` defaults
+to 3600 seconds. When OAuth2 is enabled without a session secret the
+reactor answers a clear 5xx. Cosocket DNS comes from a `resolver`
+directive the container entrypoint renders from `resolv.conf`.
+
+*Dataset access control*: route-level `accessControl` is enforced after
+authentication — `authenticationRequired: true` maps to `401`,
+`roles: [...]` maps to `403` unless the principal holds one. Basic-auth
+principals carry no roles (htpasswd has none), so role-gated routes fail
+closed under basic auth; OAuth2 roles come from `userinfo.roles`.
 
 == Configuration
 
@@ -167,6 +381,17 @@ introspection responses (default `true`)
 `packages_config_dir`:: Optional directory with per-package `<name>.json`
 mount configs (merged with `mounts` at startup)
 
+`store_dir`:: Package store directory for composite packages (§4a;
+default `/var/lib/capsium/store`, `CAPSIUM_STORE` env overrides)
+
+`encryption`:: Reactor-level decryption key for encrypted packages (§6b):
+`{"privateKeyPath": "/path/to/private.pem"}`
+
+`authentication`:: Deploy-time authentication secrets (§4b, never from
+packages): `sessionSecret` (required for OAuth2 sessions),
+`sessionTtl` (default 3600), `oauth2.clientSecret`. Env overrides:
+`CAPSIUM_SESSION_SECRET`, `OAUTH_CLIENT_SECRET`
+
 Mount entries:
 
 `package`:: Package filename (`.cap` extension optional)
@@ -181,6 +406,10 @@ mount (default `31536000` → `public, max-age=31536000`)
 
 `options.headers`:: Extra response headers applied to every response from
 this mount (an explicit `Cache-Control` here wins over `cache_ttl`)
+
+`options.encryption`:: Per-mount decryption key override (§6b):
+`{"privateKeyPath": "/path/to/key.pem"}`. Extraction caching is keyed by
+the effective key, so the same package may be mounted with different keys
 
 `options.cors`:: CORS policy: `allowed_origins` (array, `*` supported),
 `allowed_methods`, `allowed_headers`, `expose_headers`, `max_age`.
@@ -258,10 +487,24 @@ bundle install
 bundle exec rake ci     # builds fixtures + image, starts container, runs specs
 ----
 
-`rake fixtures` regenerates the generated `.cap` test fixtures (canonical
-package with `security.json`, tampered variant, multi-package and dormant
-fixtures) via `spec/fixtures/build_fixtures.rb`. The
-`mn-samples-iso-0.1.0.cap` fixture is a real legacy-format package.
+`rake fixtures` regenerates the generated `.cap` test fixtures via
+`spec/fixtures/build_fixtures.rb`:
+
+* `canonical-sample` (+tampered variant) — canonical schemas +
+`security.json`
+* `signed-sample` (+bad-signature variant) — §6a digital signatures
+* `encrypted-sample` — §6b envelope + AES-256-GCM inner zip
+* `layered-sample` — §5a layers + tombstones
+* `composite-sample` + `store/vendor-core` (two versions) — §4a store
+* `auth-sample` (basicAuth, four htpasswd hash formats) and
+`oauth-sample` (OAuth2 + PKCE against the mock provider)
+* `multi-test`, `dormant-package` — legacy/cold-start fixtures
+
+Test-only RSA keys are generated into `spec/fixtures/keys/` on each run.
+The OAuth2 integration spec serves a WEBrick mock provider (the suite
+verifies the PKCE S256 challenge server-side); the container reaches it
+via `host.docker.internal`. The `mn-samples-iso-0.1.0.cap` fixture is a
+real legacy-format package.
 
 Useful rake tasks: `rake docker:start|stop|restart|logs|shell`,
 `rake spec`, `rake test`, `rake clean`.

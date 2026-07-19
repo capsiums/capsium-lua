@@ -9,7 +9,7 @@ local cjson = require "cjson"
 local utils = require "capsium.utils"
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 
 -- Default configuration file search paths

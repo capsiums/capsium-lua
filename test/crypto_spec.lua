@@ -3,6 +3,12 @@ describe("capsium.crypto (lua-resty-openssl facade)", function()
   local utils = require "capsium.utils"
   local vectors = require "crypto_vectors"
 
+  if not crypto.available() then
+    pending("crypto backend unavailable (needs LuaJIT + libcrypto)",
+            function() end)
+    return
+  end
+
   it("reports availability of the backend", function()
     assert.is_true(crypto.available())
   end)

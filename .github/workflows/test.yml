@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly, Mondays 06:00 UTC
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -16,14 +19,14 @@ jobs:
 
     strategy:
       matrix:
-        lua-version: ['5.1', '5.2', '5.3', '5.4', 'luajit-2.1.0-beta3']
+        lua-version: ['5.1', '5.2', '5.3', '5.4', 'luajit-2.1']
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Lua ${{ matrix.lua-version }}
-        uses: leafo/gh-actions-lua@v12
+        uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: ${{ matrix.lua-version }}
 
@@ -37,7 +40,12 @@ jobs:
 
       - name: Install dependencies from rockspec
         run: |
-          luarocks make capsium-dev-1.rockspec --only-deps
+          luarocks make capsium-0.2.0-1.rockspec --only-deps
+
+      - name: Install bit library for Lua 5.1 (SHA-256 fallback)
+        if: ${{ matrix.lua-version == '5.1' }}
+        run: |
+          luarocks install luabitop
 
       - name: Install test dependencies
         run: |
@@ -61,3 +69,27 @@ jobs:
             luacov.report.out
             luacov.stats.out
         if: always()
+
+  luacheck:
+    name: Luacheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up LuaJIT
+        uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: 'luajit-2.1'
+
+      - name: Set up LuaRocks
+        uses: leafo/gh-actions-luarocks@v6
+
+      - name: Install luacheck
+        run: |
+          luarocks install luacheck
+
+      - name: Run luacheck
+        run: |
+          luacheck lib lua test

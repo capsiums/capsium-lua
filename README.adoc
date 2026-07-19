@@ -10,367 +10,111 @@ toc::[]
 
 == Purpose
 
-The Capsium Nginx extension is an OpenResty/Nginx plugin that serves
-Capsium packages (`.cap` files) directly through Nginx with Lua. It provides
-a flexible configuration system for mounting multiple packages at different
-paths or virtual hosts, making it ideal for serving multiple web applications
-from a single Nginx instance.
-
-This extension eliminates the need for separate web servers or complex
-deployment pipelines. Simply drop a `.cap` file into the packages directory,
-configure its mount point, and it's immediately available through Nginx.
+The Capsium Nginx extension is an OpenResty/Nginx reactor that serves
+Capsium packages (`.cap` files, ZIP format) directly through Nginx with
+Lua. Drop a `.cap` file into the packages directory, optionally configure
+a mount point, and the package is served — extracted on demand, verified,
+and routed.
 
 == Features
 
-The Capsium Nginx extension provides the following capabilities:
-
-* <<package-extraction,Automatic package extraction>> - Extracts `.cap` files
-(ZIP format) on-demand with caching
-* <<route-resolution,Route resolution>> - Maps URLs to package content using
-`routes.json` definitions
-* <<multi-package-support,Multi-package support>> - Serve multiple packages
-from different paths or domains
-* <<custom-headers,Custom headers>> - Apply per-package HTTP headers including
-CORS and security headers
-* <<api-introspection,API introspection>> - Query package metadata, routes,
-and content validity
-* <<automatic-testing,Continuous integration>> - GitHub Actions workflow
-ensures compatibility across OpenResty versions
+* *Single module tree* — one framework-agnostic core (`lib/capsium`) plus a
+thin Nginx glue layer (`lua/capsium`); no duplicated logic
+* *Integrity verification* — SHA-256 checksums from `security.json` are
+verified at extraction; tampered packages are rejected with 5xx and reported
+by `content-validity`
+* *Manifest-driven routing* — routes are auto-generated from `manifest.json`
+per the Capsium routing rules (dual HTML routes, index, dataset routes)
+* *Canonical + legacy schemas* — metadata, manifest, routes, storage and
+security files are accepted in both the canonical forms and the legacy gem
+forms (normalized on read)
+* *Config-driven mounts* — packages are mounted by Host/path prefix from
+`config.json`; every package is also auto-mounted at
+`/capsium/<package-name>`
+* *Cold-start introspection* — `/api/v1/introspect/*` endpoints lazily
+extract and load packages on demand
+* *Per-mount headers and CORS* — custom headers and full CORS handling
+(including preflight) per mount
 
 == Architecture
 
-=== General
+.Module structure
+[source]
+----
+lib/capsium/                  Framework-agnostic core (the rock)
+├── utils.lua                 Pure helpers (tables, JSON files, paths)
+├── mime.lua                  MIME type detection (text/javascript per RFC 9239)
+├── csv.lua                   Minimal CSV parser (dataset support)
+├── reactor.lua               Reactor core: package management + introspection
+├── package/
+│   ├── package.lua           Package model (OOP): load/normalize/resolve
+│   ├── extractor.lua         Atomic .cap extraction (tmp dir + rename)
+│   ├── router.lua            Schema normalization + route auto-generation
+│   └── security.lua          security.json parsing + SHA-256 verification
+└── adapters/
+    ├── nginx.lua             fs/zip adapters (LuaFileSystem + lua-zip)
+    └── hash.lua              SHA-256 (resty.sha256 in OpenResty,
+                            pure-Lua fallback elsewhere)
 
-The Capsium Nginx extension uses OpenResty (Nginx with embedded LuaJIT) to
-process requests through a Lua-based router. When a request arrives, the
-extension:
+lua/capsium/                  Nginx glue (only code that touches ngx)
+├── init.lua                  Entry point: wires adapters into the core,
+│                             request handling, introspection API
+└── config.lua                config.json loading + mount resolution
+----
 
-. Identifies the target Capsium package from the URL
-. Extracts the package if not already cached
-. Loads the package's `routes.json` configuration
-. Resolves the request path to a file within the package
-. Serves the file with appropriate MIME types and headers
+The core never references `ngx`; the glue never implements domain logic.
+Other platforms can plug in their own fs/zip/hash adapters.
 
-.Data flow diagram
+.Request flow
 [source]
 ----
 HTTP Request
      │
      ▼
-┌────────────────┐
-│ Nginx Location │
-│   /app/*       │
-└────────┬───────┘
-         │
-         ▼
-┌────────────────────┐
-│ Lua Handler        │
-│ (init.lua)         │
-└────────┬───────────┘
-         │
-         ├─────────────────┐
-         │                 │
-         ▼                 ▼
-┌────────────────┐  ┌──────────────┐
-│ Config Module  │  │ Extractor    │
-│ Get mount cfg  │  │ Extract .cap │
-└────────┬───────┘  └──────┬───────┘
-         │                 │
-         │                 ▼
-         │          ┌──────────────┐
-         │          │ Router       │
-         │          │ Load routes  │
-         │          └──────┬───────┘
-         │                 │
-         └─────────┬───────┘
-                   │
-                   ▼
-            ┌──────────────┐
-            │ File Serving │
-            │ + Headers    │
-            └──────┬───────┘
-                   │
-                   ▼
-            HTTP Response
+generic location /  ──►  capsium.handle_request()
+     │                     ├─ resolve mount (Host + path prefix from config)
+     │                     ├─ method check (GET/HEAD; OPTIONS w/ CORS)
+     │                     ├─ reactor:get_package(name)
+     │                     │    ├─ extract .cap (atomic, verify SHA-256)
+     │                     │    └─ load package (metadata/manifest/routes/storage)
+     │                     ├─ package:resolve(subpath)
+     │                     └─ serve static file / dataset JSON
+     ▼
+location /api/v1/introspect ──► capsium.handle_introspection()
 ----
 
-=== Component architecture
+== Package schemas
 
-The extension consists of several Lua modules working together:
+Both canonical and legacy forms are accepted and normalized on read
+(see the Capsium architecture decisions document):
 
-.Module structure
-[source]
-----
-lua/capsium/
-├── init.lua          Main entry point, request handling
-├── config.lua        Configuration management
-├── extractor.lua     Package extraction from .cap files
-├── router.lua        Route resolution and file mapping
-└── utils.lua         Utility functions (hashing, timestamps)
-----
+* `metadata.json` (required) — legacy array `dependencies` are normalized
+to the canonical object form
+* `manifest.json` — canonical `{"resources": {path: {type, visibility}}}`;
+legacy `{"content": [{file, mime}]}` or `{"content": {name: mime}}`.
+When absent, the manifest is generated by scanning `content/`
+* `routes.json` — canonical `{"index": ..., "routes": [{path, resource |
+dataset}]}`; legacy array or object forms with `target.file`
+(content-relative). When absent, routes are auto-generated:
+** `index` → `content/index.html` (also routed at `/`)
+** every manifest resource under `content/` routed relative to `content/`
+** HTML files get dual routes: `/page` and `/page.html`
+** every dataset gets `/api/v1/data/<id>`
+* `storage.json` — canonical `{"storage": {"dataSets": {...}}}`;
+legacy `{"datasets": [{name, source, format, schema}]}`. Dataset sources
+are served as JSON (`.json` served as-is, `.csv` converted to JSON
+objects). YAML and SQLite datasets are not supported by this reactor
+* `security.json` — when present, every listed file's SHA-256 is verified
+at extraction; the package is *rejected* on mismatch (5xx with reason).
+`content-validity` reports the verification result
 
-Each module has a specific responsibility:
+== Configuration
 
-`init.lua`:: Main request handler that coordinates other modules, applies
-headers, and serves content
+Configuration is read from `$CAPSIUM_CONFIG_PATH`, else the first existing
+of `/etc/capsium/config.json`, `/etc/capsium/nginx/config.json`,
+`/var/lib/capsium/config.json`, `./config.json`.
 
-`config.lua`:: Loads and manages configuration from JSON files, supports both
-global mounts array and per-package configuration files
-
-`extractor.lua`:: Handles ZIP extraction of `.cap` files using lua-zip,
-maintains extracted package cache
-
-`router.lua`:: Loads `routes.json` from packages, resolves URL paths to
-filesystem paths, generates default routes when needed
-
-`utils.lua`:: Provides helper functions for file operations, content hashing,
-and timestamp formatting
-
-== Installation
-
-=== Prerequisites
-
-Before installing the Capsium Nginx extension, ensure you have:
-
-* Docker and Docker Compose (recommended method)
-* OR OpenResty 1.21.4+ with LuaRocks (manual installation)
-* Capsium package files (`.cap` format)
-
-=== Using Docker (recommended)
-
-This is the simplest installation method and ensures consistent behavior
-across environments.
-
-==== General
-
-Docker installation provides a pre-configured OpenResty environment with all
-dependencies. This method is recommended for both development and production
-deployments.
-
-==== Installation steps
-
-. Clone the repository:
-+
-[source,bash]
-----
-git clone https://github.com/yourusername/capsium-lua.git
-cd capsium-lua
-----
-
-. Create directories for your packages:
-+
-[source,bash]
-----
-mkdir -p packages
-----
-
-. Place your Capsium packages in the `packages` directory:
-+
-[source,bash]
-----
-cp /path/to/your-package-1.0.0.cap packages/
-----
-
-. Create a configuration file at `config/config.json`:
-+
-[source,json]
-----
-{
-  "package_dir": "/var/lib/capsium/packages",
-  "extract_dir": "/var/lib/capsium/extracted",
-  "mounts": [
-    {
-      "package": "your-package-1.0.0.cap",
-      "path": "/app"
-    }
-  ]
-}
-----
-
-. Build and start the container:
-+
-[source,bash]
-----
-docker-compose up -d
-----
-
-. Verify the installation:
-+
-[source,bash]
-----
-curl http://localhost:8080/app/
-----
-+
-You should receive the content from your Capsium package.
-
-==== Example deployment
-
-.Deploying a documentation package
-[example]
-====
-Suppose you have a documentation package `docs-2.1.0.cap` that you want to
-serve at `/docs`:
-
-. Copy the package:
-+
-[source,bash]
-----
-cp docs-2.1.0.cap packages/
-----
-
-. Update `config/config.json`:
-+
-[source,json]
-----
-{
-  "package_dir": "/var/lib/capsium/packages",
-  "extract_dir": "/var/lib/capsium/extracted",
-  "mounts": [
-    {
-      "package": "docs-2.1.0.cap",
-      "path": "/docs",
-      "options": {
-        "cache_ttl": 7200,
-        "headers": {
-          "Cache-Control": "public, max-age=3600"
-        }
-      }
-    }
-  ]
-}
-----
-
-. Restart the container:
-+
-[source,bash]
-----
-docker-compose restart
-----
-
-. Access your documentation:
-+
-[source,bash]
-----
-curl http://localhost:8080/docs/
-----
-====
-
-=== Manual installation
-
-For production environments or custom setups, you can install the extension
-directly on your server.
-
-==== General
-
-Manual installation gives you full control over the OpenResty configuration
-and allows integration with existing Nginx setups. This method requires
-more system administration knowledge but provides greater flexibility.
-
-==== Installation steps
-
-. Install OpenResty:
-+
-On Ubuntu/Debian:
-+
-[source,bash]
-----
-wget -qO - https://openresty.org/package/pubkey.gpg | \
-  sudo apt-key add -
-echo "deb http://openresty.org/package/ubuntu $(lsb_release -sc) main" | \
-  sudo tee /etc/apt/sources.list.d/openresty.list
-sudo apt-get update
-sudo apt-get install -y openresty
-----
-+
-On CentOS/RHEL:
-+
-[source,bash]
-----
-sudo yum install -y yum-utils
-sudo yum-config-manager --add-repo \
-  https://openresty.org/package/centos/openresty.repo
-sudo yum install -y openresty
-----
-
-. Install LuaRocks dependencies:
-+
-[source,bash]
-----
-sudo /usr/local/openresty/luajit/bin/luarocks install lua-cjson
-sudo /usr/local/openresty/luajit/bin/luarocks install luafilesystem
-sudo /usr/local/openresty/luajit/bin/luarocks install brimworks-zip
-----
-
-. Create directory structure:
-+
-[source,bash]
-----
-sudo mkdir -p /usr/local/openresty/nginx/lua/capsium
-sudo mkdir -p /var/lib/capsium/packages
-sudo mkdir -p /var/lib/capsium/extracted
-sudo mkdir -p /etc/capsium
-sudo mkdir -p /etc/capsium/packages
-----
-
-. Copy Lua modules:
-+
-[source,bash]
-----
-sudo cp -r lua/capsium/* /usr/local/openresty/nginx/lua/capsium/
-----
-
-. Copy configuration files:
-+
-[source,bash]
-----
-sudo cp config/config.json /etc/capsium/
-sudo cp nginx/nginx.conf /usr/local/openresty/nginx/conf/
-sudo cp nginx/conf.d/capsium.conf \
-  /usr/local/openresty/nginx/conf/conf.d/
-----
-
-. Set proper permissions:
-+
-[source,bash]
-----
-sudo chown -R nobody:nobody /var/lib/capsium
-sudo chmod -R 755 /var/lib/capsium
-----
-
-. Test the configuration:
-+
-[source,bash]
-----
-sudo /usr/local/openresty/nginx/sbin/nginx -t
-----
-
-. Start OpenResty:
-+
-[source,bash]
-----
-sudo systemctl enable openresty
-sudo systemctl start openresty
-----
-
-==== Example production deployment
-
-.Deploying multiple applications with virtual hosts
-[example]
-====
-This example shows how to serve multiple Capsium packages from different
-domains on a production server.
-
-. Prepare your packages:
-+
-[source,bash]
-----
-sudo cp app-frontend-3.0.0.cap /var/lib/capsium/packages/
-sudo cp app-api-2.5.0.cap /var/lib/capsium/packages/
-sudo cp docs-1.0.0.cap /var/lib/capsium/packages/
-----
-
-. Create the configuration at `/etc/capsium/config.json`:
-+
+.Example `config/config.json`
 [source,json]
 ----
 {
@@ -381,419 +125,26 @@ sudo cp docs-1.0.0.cap /var/lib/capsium/packages/
   "log_level": "info",
   "mounts": [
     {
-      "package": "app-frontend-3.0.0.cap",
-      "path": "/",
-      "domain": "app.example.com",
-      "options": {
-        "cache_ttl": 7200,
-        "headers": {
-          "X-Frame-Options": "SAMEORIGIN",
-          "X-Content-Type-Options": "nosniff",
-          "Strict-Transport-Security": "max-age=31536000"
-        }
-      }
-    },
-    {
-      "package": "app-api-2.5.0.cap",
-      "path": "/api",
-      "domain": "api.example.com",
-      "options": {
-        "cors": {
-          "allowed_origins": ["https://app.example.com"],
-          "allowed_methods": ["GET", "POST", "PUT", "DELETE"],
-          "allowed_headers": ["Content-Type", "Authorization"]
-        }
-      }
-    },
-    {
-      "package": "docs-1.0.0.cap",
-      "path": "/",
-      "domain": "docs.example.com",
-      "options": {
-        "cache_ttl": 14400,
-        "headers": {
-          "Cache-Control": "public, max-age=7200"
-        }
-      }
-    }
-  ]
-}
-----
-
-. Update your Nginx configuration to handle multiple domains. Create
-`/usr/local/openresty/nginx/conf/conf.d/capsium-production.conf`:
-+
-[source,nginx]
-----
-# Initialize Capsium
-init_by_lua_block {
-    local capsium = require "capsium"
-    local ok, err = capsium.init({
-        config_path = "/etc/capsium/config.json"
-    })
-    if not ok then
-        ngx.log(ngx.ERR, "Failed to initialize Capsium: ", err)
-    end
-}
-
-# Frontend application
-server {
-    listen 80;
-    server_name app.example.com;
-
-    location / {
-        set $capsium_package app-frontend-3.0.0;
-        content_by_lua_block {
-            local capsium = require "capsium"
-            capsium.handle_request()
-        }
-    }
-}
-
-# API server
-server {
-    listen 80;
-    server_name api.example.com;
-
-    location /api {
-        set $capsium_package app-api-2.5.0;
-        content_by_lua_block {
-            local capsium = require "capsium"
-            capsium.handle_request()
-        }
-    }
-}
-
-# Documentation
-server {
-    listen 80;
-    server_name docs.example.com;
-
-    location / {
-        set $capsium_package docs-1.0.0;
-        content_by_lua_block {
-            local capsium = require "capsium"
-            capsium.handle_request()
-        }
-    }
-}
-----
-
-. Reload OpenResty:
-+
-[source,bash]
-----
-sudo systemctl reload openresty
-----
-
-. Verify each domain:
-+
-[source,bash]
-----
-curl -H "Host: app.example.com" http://localhost/
-curl -H "Host: api.example.com" http://localhost/api/
-curl -H "Host: docs.example.com" http://localhost/
-----
-====
-
-[[package-extraction]]
-== Package extraction
-
-=== General
-
-The Capsium Nginx extension automatically extracts `.cap` files (which are
-ZIP archives) on first access. Extracted packages are cached to avoid
-repeated extraction on subsequent requests.
-
-The extraction process:
-
-. Checks if the package has already been extracted
-. Verifies the extracted version matches the package file
-. Extracts to the configured `extract_dir` if needed
-. Maintains a cache of extracted packages
-
-=== How extraction works
-
-When a request arrives for a package, the extractor module:
-
-. Constructs the package path from `package_dir` and package name
-. Checks if extraction directory exists with matching content
-. If not cached, extracts all files from the ZIP archive
-. Reads package metadata (`metadata.json`, `manifest.json`)
-. Makes content available for the router
-
-.Example package structure after extraction
-[source]
-----
-/var/lib/capsium/extracted/
-└── my-app-1.0.0/
-    ├── manifest.json
-    ├── metadata.json
-    ├── routes.json
-    └── content/
-        ├── index.html
-        ├── styles.css
-        ├── script.js
-        └── assets/
-            └── logo.png
-----
-
-=== Configuration options
-
-The extraction behavior is controlled by these configuration parameters:
-
-`package_dir`:: Directory where `.cap` files are stored (default:
-`/var/lib/capsium/packages`)
-
-`extract_dir`:: Directory where packages are extracted (default:
-`/var/lib/capsium/extracted`)
-
-.Configuring extraction directories
-[example]
-====
-To use custom directories for package storage and extraction:
-
-[source,json]
-----
-{
-  "package_dir": "/data/capsium/packages",
-  "extract_dir": "/tmp/capsium/extracted",
-  "cache_enabled": true
-}
-----
-
-This configuration stores `.cap` files in `/data/capsium/packages` and
-extracts them to `/tmp/capsium/extracted`.
-====
-
-[[route-resolution]]
-== Route resolution
-
-=== General
-
-The router module maps incoming HTTP requests to files within Capsium
-packages using the package's `routes.json` configuration. This enables
-flexible URL structures without modifying package contents.
-
-=== Route configuration
-
-Each Capsium package includes a `routes.json` file that defines how URLs
-map to package content:
-
-[source,json]
-----
-{
-  "routes": {
-    "/": {
-      "target": {
-        "file": "content/index.html"
-      }
-    },
-    "/about": {
-      "target": {
-        "file": "content/about.html"
-      }
-    },
-    "/api/data": {
-      "target": {
-        "file": "content/api/data.json"
-      }
-    }
-  }
-}
-----
-
-The router performs these steps:
-
-. Loads `routes.json` from the extracted package
-. Strips the mount path prefix from the request URI
-. Looks up the remaining path in the routes configuration
-. Returns the target file path with appropriate MIME type
-. Generates default routes if `routes.json` is missing
-
-=== Default route generation
-
-If a package doesn't include `routes.json`, the router automatically
-generates routes based on the file structure:
-
-* `/` → `content/index.html`
-* `/path/to/file.html` → `content/path/to/file.html`
-* `/assets/style.css` → `content/assets/style.css`
-
-.Example of automatic routing
-[example]
-====
-Given this package structure:
-
-[source]
-----
-my-package/
-└── content/
-    ├── index.html
-    ├── about/
-    │   └── index.html
-    └── assets/
-        ├── style.css
-        └── script.js
-----
-
-Without `routes.json`, these routes are automatically available:
-
-* `GET /` → `content/index.html`
-* `GET /about/` → `content/about/index.html`
-* `GET /assets/style.css` → `content/assets/style.css`
-* `GET /assets/script.js` → `content/assets/script.js`
-====
-
-[[multi-package-support]]
-== Multi-package support
-
-=== General
-
-The Capsium Nginx extension supports serving multiple packages simultaneously
-with different mount configurations. This enables complex multi-application
-deployments from a single Nginx instance.
-
-=== Configuration methods
-
-There are two ways to configure multiple packages:
-
-Global mounts array:: Define all packages in the main `config.json` file
-using the `mounts` array
-
-Per-package files:: Create individual JSON files in `packages_config_dir`
-for each package
-
-The global mounts array takes precedence if both methods are used for the
-same package.
-
-=== Using the mounts array
-
-Define all packages in a single configuration file:
-
-[source,json]
-----
-{
-  "package_dir": "/var/lib/capsium/packages",
-  "extract_dir": "/var/lib/capsium/extracted",
-  "mounts": [
-    {
-      "package": "frontend-app-1.0.0.cap",
+      "package": "mn-samples-iso-0.1.0.cap",
       "path": "/app",
-      "domain": "example.com"
-    },
-    {
-      "package": "admin-panel-2.0.0.cap",
-      "path": "/admin",
-      "domain": "example.com"
-    },
-    {
-      "package": "api-server-1.5.0.cap",
-      "path": "/api",
-      "domain": "api.example.com"
-    }
-  ]
-}
-----
-
-=== Using per-package configuration
-
-Create separate files in `/etc/capsium/packages/`:
-
-.File: `/etc/capsium/packages/frontend-app-1.0.0.json`
-[source,json]
-----
-{
-  "path": "/app",
-  "domain": "example.com",
-  "options": {
-    "cache_ttl": 3600
-  }
-}
-----
-
-.File: `/etc/capsium/packages/admin-panel-2.0.0.json`
-[source,json]
-----
-{
-  "path": "/admin",
-  "domain": "example.com",
-  "options": {
-    "cache_ttl": 7200,
-    "headers": {
-      "X-Frame-Options": "DENY"
-    }
-  }
-}
-----
-
-=== Mount configuration options
-
-Each mount (whether in mounts array or per-package file) supports:
-
-`package`:: Package filename with `.cap` extension (required in mounts array,
-implicit in per-package files)
-
-`path`:: URL path where package is mounted (e.g., `/app`, `/admin`)
-
-`domain`:: Domain name for virtual hosting (optional)
-
-`port`:: Port number for virtual hosting (optional)
-
-`https`:: Whether HTTPS is used (optional, boolean)
-
-`options`:: Additional options object containing:
-
-* `cache_ttl`: Cache time-to-live in seconds
-* `headers`: Custom HTTP headers to add
-* `cors`: CORS configuration
-
-.Multi-package deployment example
-[example]
-====
-Deploy three packages with different configurations:
-
-[source,json]
-----
-{
-  "package_dir": "/var/lib/capsium/packages",
-  "extract_dir": "/var/lib/capsium/extracted",
-  "mounts": [
-    {
-      "package": "marketing-site-1.0.0.cap",
-      "path": "/",
       "domain": "example.com",
       "options": {
         "cache_ttl": 7200,
         "headers": {
-          "Cache-Control": "public, max-age=3600",
+          "X-Frame-Options": "SAMEORIGIN",
           "X-Content-Type-Options": "nosniff"
         }
       }
     },
     {
-      "package": "web-app-2.1.0.cap",
-      "path": "/app",
-      "domain": "app.example.com",
-      "options": {
-        "cache_ttl": 3600,
-        "headers": {
-          "X-Frame-Options": "SAMEORIGIN",
-          "Strict-Transport-Security": "max-age=31536000"
-        }
-      }
-    },
-    {
-      "package": "rest-api-1.5.0.cap",
-      "path": "/v1",
-      "domain": "api.example.com",
+      "package": "api-1.0.0.cap",
+      "path": "/api",
       "options": {
         "cors": {
-          "allowed_origins": ["https://app.example.com"],
-          "allowed_methods": ["GET", "POST", "PUT", "DELETE"],
-          "allowed_headers": ["Content-Type", "Authorization"],
-          "expose_headers": ["X-Request-ID"],
-          "max_age": 86400
+          "allowed_origins": ["https://example.com"],
+          "allowed_methods": ["GET"],
+          "allowed_headers": ["Content-Type"],
+          "max_age": 600
         }
       }
     }
@@ -801,750 +152,127 @@ Deploy three packages with different configurations:
 }
 ----
 
-This configuration serves:
+Top-level keys:
 
-* Marketing site at `https://example.com/`
-* Web application at `https://app.example.com/app/`
-* REST API at `https://api.example.com/v1/`
+`package_dir`:: Directory containing `.cap` files
+(default `/var/lib/capsium/packages`)
 
-Each package has custom caching, security headers, and CORS settings.
-====
+`extract_dir`:: Extraction target (default `/var/lib/capsium/extracted`)
 
-[[custom-headers]]
-== Custom headers
+`cache_enabled`:: Use the `capsium_cache` shared dict to cache
+introspection responses (default `true`)
 
-=== General
+`cache_ttl`:: TTL in seconds for the shared-dict cache (default `3600`)
 
-The Capsium Nginx extension allows you to configure custom HTTP headers on
-a per-package basis. This is essential for security headers, CORS policies,
-and cache control.
+`packages_config_dir`:: Optional directory with per-package `<name>.json`
+mount configs (merged with `mounts` at startup)
 
-=== Header configuration
+Mount entries:
 
-Headers are configured in the `options.headers` object of a package mount:
+`package`:: Package filename (`.cap` extension optional)
 
-[source,json]
-----
-{
-  "package": "my-app-1.0.0.cap",
-  "path": "/app",
-  "options": {
-    "headers": {
-      "X-Frame-Options": "SAMEORIGIN",
-      "X-Content-Type-Options": "nosniff",
-      "Strict-Transport-Security": "max-age=31536000",
-      "Cache-Control": "public, max-age=3600"
-    }
-  }
-}
-----
+`path`:: Mount path prefix (default `/capsium/<package-name>`)
 
-All configured headers are automatically added to every response from that
-package.
+`domain`:: Virtual host. Advisory: the mount answers on all hosts, and is
+preferred for the named host when mounts overlap
 
-=== CORS configuration
+`options.cache_ttl`:: Static `Cache-Control` max-age override for this
+mount (default `31536000` → `public, max-age=31536000`)
 
-For Cross-Origin Resource Sharing, use the `options.cors` object:
+`options.headers`:: Extra response headers applied to every response from
+this mount (an explicit `Cache-Control` here wins over `cache_ttl`)
 
-[source,json]
-----
-{
-  "package": "api-server-1.0.0.cap",
-  "path": "/api",
-  "options": {
-    "cors": {
-      "allowed_origins": ["https://app.example.com", "https://admin.example.com"],
-      "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-      "allowed_headers": ["Content-Type", "Authorization", "X-Request-ID"],
-      "expose_headers": ["X-Response-Time", "X-Request-ID"],
-      "max_age": 86400
-    }
-  }
-}
-----
+`options.cors`:: CORS policy: `allowed_origins` (array, `*` supported),
+`allowed_methods`, `allowed_headers`, `expose_headers`, `max_age`.
+Preflight `OPTIONS` requests are answered with `204` when CORS is
+configured.
 
-The CORS configuration supports:
+Every package in `package_dir` is always also available at
+`/capsium/<package-name>` without configuration. `/api/v1/introspect`
+is reserved.
 
-`allowed_origins`:: Array of allowed origin domains
+Package routes are GET-only: other methods receive `405`
+(`Allow: GET, HEAD`); HEAD is served like GET without a body. Dynamic
+`handler` routes are accepted by the parser but answered with `501`.
 
-`allowed_methods`:: Array of allowed HTTP methods
+== HTTP API
 
-`allowed_headers`:: Array of allowed request headers
+Package serving:: routes from the package under its mount point.
 
-`expose_headers`:: Array of headers exposed to the client
+Introspection (GET only)::
 
-`max_age`:: Preflight cache duration in seconds
+`/api/v1/introspect/metadata`::: `{packages: [{name, version, author,
+description}]}`
 
-.Security headers example
-[example]
-====
-Configure comprehensive security headers for a production application:
+`/api/v1/introspect/routes`::: `{routes: [{package, routes: [{method,
+path}]}]}`
 
-[source,json]
-----
-{
-  "package": "secure-app-1.0.0.cap",
-  "path": "/",
-  "domain": "secure.example.com",
-  "https": true,
-  "options": {
-    "cache_ttl": 7200,
-    "headers": {
-      "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
-      "X-Frame-Options": "DENY",
-      "X-Content-Type-Options": "nosniff",
-      "X-XSS-Protection": "1; mode=block",
-      "Referrer-Policy": "strict-origin-when-cross-origin",
-      "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
-      "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
-    }
-  }
-}
-----
+`/api/v1/introspect/content-hashes`::: `{contentHashes: [{package,
+hash}]}` — SHA-256 of the `.cap` blob
 
-This configuration implements defense-in-depth security:
+`/api/v1/introspect/content-validity`::: `{contentValidity: [{package,
+valid, lastChecked, reason?}]}` — actual integrity verification result
 
-* HSTS with subdomains and preload
-* Prevents clickjacking with X-Frame-Options
-* Blocks MIME sniffing
-* Enables XSS protection
-* Controls referrer information
-* Restricts dangerous browser features
-* Implements Content Security Policy
-====
+All introspection endpoints lazily extract and load packages on demand:
+a freshly started reactor reports every `.cap` in `package_dir`.
 
-[[api-introspection]]
-== API introspection
-
-=== General
-
-The Capsium Nginx extension provides HTTP API endpoints for querying package
-information, routes, content hashes, and validity status. These endpoints are
-useful for monitoring, debugging, and automation.
-
-=== Available endpoints
-
-The API is available at `/api/v1/introspect/` with the following endpoints:
-
-`/api/v1/introspect/metadata`:: Returns metadata for all loaded packages
-
-`/api/v1/introspect/routes`:: Returns route configurations for all packages
-
-`/api/v1/introspect/content-hashes`:: Returns SHA256 hashes of all packages
-
-`/api/v1/introspect/content-validity`:: Returns validation status of all
-packages
-
-=== Metadata endpoint
-
-Returns package metadata including name, version, and dependencies.
-
-.Request
-[source,bash]
-----
-curl http://localhost:8080/api/v1/introspect/metadata
-----
-
-.Response
-[source,json]
-----
-{
-  "packages": [
-    {
-      "name": "my-app",
-      "version": "1.0.0",
-      "dependencies": {
-        "framework": "^2.0.0"
-      },
-      "timestamp": "2025-03-15T10:30:00Z"
-    }
-  ]
-}
-----
-
-=== Routes endpoint
-
-Returns all route configurations for loaded packages.
-
-.Request
-[source,bash]
-----
-curl http://localhost:8080/api/v1/introspect/routes
-----
-
-.Response
-[source,json]
-----
-{
-  "routes": [
-    {
-      "package": "my-app",
-      "routes": [
-        {
-          "path": "/",
-          "target": "content/index.html"
-        },
-        {
-          "path": "/about",
-          "target": "content/about.html"
-        }
-      ]
-    }
-  ]
-}
-----
-
-=== Content hashes endpoint
-
-Returns SHA256 hashes of package files for integrity verification.
-
-.Request
-[source,bash]
-----
-curl http://localhost:8080/api/v1/introspect/content-hashes
-----
-
-.Response
-[source,json]
-----
-{
-  "contentHashes": [
-    {
-      "package": "my-app",
-      "hash": "a1b2c3d4e5f6..."
-    }
-  ]
-}
-----
-
-=== Content validity endpoint
-
-Returns validation status of packages.
-
-.Request
-[source,bash]
-----
-curl http://localhost:8080/api/v1/introspect/content-validity
-----
-
-.Response
-[source,json]
-----
-{
-  "contentValidity": [
-    {
-      "package": "my-app",
-      "valid": true,
-      "lastChecked": "2025-03-15T10:35:00Z",
-      "reason": null
-    }
-  ]
-}
-----
-
-.Using introspection for monitoring
-[example]
-====
-Create a monitoring script that checks package validity:
+== Running with Docker
 
 [source,bash]
 ----
-#!/bin/bash
-
-# Check package validity
-RESPONSE=$(curl -s http://localhost:8080/api/v1/introspect/content-validity)
-
-# Parse response and check for invalid packages
-INVALID=$(echo "$RESPONSE" | jq -r '.contentValidity[] | select(.valid == false) | .package')
-
-if [ -n "$INVALID" ]; then
-    echo "WARNING: Invalid packages detected:"
-    echo "$INVALID"
-    exit 1
-else
-    echo "All packages are valid"
-    exit 0
-fi
+docker build -t capsium-nginx .
+docker run -d -p 8080:80 \
+  -v $PWD/packages:/var/lib/capsium/packages \
+  -v $PWD/config:/etc/capsium \
+  capsium-nginx
 ----
 
-Run this script periodically with cron:
+Or with docker compose (`docker-compose up -d`).
 
-[source,crontab]
-----
-*/15 * * * * /usr/local/bin/check-capsium-packages.sh
-----
-====
+The base image is pinned: `openresty/openresty:1.27.1.2-12-alpine-fat`
+(see the `BASE_IMAGE` arg in the `Dockerfile` and the `Rakefile`).
 
-== Development
+== Testing
 
-=== General
+All Lua tooling runs in Docker; the RSpec integration suite runs on the
+host against the Dockerized reactor.
 
-The Capsium Nginx extension uses Rake for task automation, including Docker
-container management, running tests, and development workflows. All tasks are
-designed to be simple and intuitive for both local development and CI/CD.
-
-=== Available Rake tasks
-
-To see all available tasks:
+Lua unit tests (busted) and lint (luacheck)::
 
 [source,bash]
 ----
-bundle exec rake -T
+docker build -t capsium-nginx:test .
+docker run --rm -v $PWD:/src -w /src capsium-nginx:test sh -c \
+  'luarocks install busted && luarocks install luacov && busted --verbose'
+docker run --rm -v $PWD:/src -w /src capsium-nginx:test sh -c \
+  'luarocks install luacheck && luacheck lib lua test'
 ----
 
-==== Docker management
+(or `rake lua:test` / `rake lua:lint`)
 
-`rake docker:build`:: Build the Docker image with OpenResty
-
-`rake docker:start`:: Start the Docker container (or reuse if already running)
-
-`rake docker:stop`:: Stop and remove the Docker container
-
-`rake docker:restart`:: Restart the container
-
-`rake docker:logs`:: View container logs (follows output)
-
-`rake docker:shell`:: Open a shell in the running container
-
-`rake docker:clean`:: Remove containers and images
-
-==== Testing
-
-`rake` or `rake test`:: Run all tests (default task, ensures container is running)
-
-`rake spec`:: Run all RSpec tests with documentation format
-
-`rake spec:ci_report`:: Run tests and generate JSON report for CI
-
-`rake spec:api`:: Run only API introspection tests
-
-`rake spec:packages`:: Run only package serving tests
-
-`rake spec:config`:: Run only configuration tests
-
-`rake spec:basic`:: Run only basic functionality tests
-
-==== Workflows
-
-`rake ci`:: Full CI workflow: build → start → test → cleanup
-
-`rake install`:: Install Ruby dependencies (bundle install)
-
-`rake clean`:: Clean all artifacts and containers
-
-=== Running tests locally
-
-The simplest way to run tests locally:
+Integration suite (RSpec, needs Docker + Ruby)::
 
 [source,bash]
 ----
-bundle exec rake
+bundle install
+bundle exec rake ci     # builds fixtures + image, starts container, runs specs
 ----
 
-This automatically:
+`rake fixtures` regenerates the generated `.cap` test fixtures (canonical
+package with `security.json`, tampered variant, multi-package and dormant
+fixtures) via `spec/fixtures/build_fixtures.rb`. The
+`mn-samples-iso-0.1.0.cap` fixture is a real legacy-format package.
 
-. Checks if a test container is already running
-. Reuses the existing container if available
-. Starts a new container if needed
-. Runs all RSpec tests with documentation output
+Useful rake tasks: `rake docker:start|stop|restart|logs|shell`,
+`rake spec`, `rake test`, `rake clean`.
 
-For a complete CI-like test run:
+== Continuous integration
 
-[source,bash]
-----
-bundle exec rake ci
-----
+* `test.yml` — busted matrix (Lua 5.1–5.4, LuaJIT 2.1) + luacheck job
+* `nginx.yml` — RSpec integration suite via `rake ci`
 
-This performs a full build and test cycle, cleaning up afterward.
-
-=== Test structure
-
-Tests are organized in the `spec/` directory using RSpec:
-
-[source]
-----
-spec/
-├── spec_helper.rb       RSpec configuration and helpers
-├── api_spec.rb          API introspection endpoint tests
-├── basic_spec.rb        Basic server functionality tests
-├── config_spec.rb       Configuration and mounting tests
-└── packages_spec.rb     Package serving and routing tests
-----
-
-=== Development workflow
-
-==== Starting the server
-
-To start the development server:
-
-[source,bash]
-----
-bundle exec rake docker:start
-----
-
-The server will be available at http://localhost:8080. If the container is
-already running, this command will reuse it.
-
-==== Viewing logs
-
-Monitor server logs in real-time:
-
-[source,bash]
-----
-bundle exec rake docker:logs
-----
-
-Press Ctrl+C to stop following logs.
-
-==== Testing changes
-
-After making changes to Lua code or configuration:
-
-[source,bash]
-----
-bundle exec rake docker:restart
-bundle exec rake spec
-----
-
-The restart ensures your changes are loaded, and spec runs the tests.
-
-==== Debugging
-
-Open a shell in the running container to inspect files or run commands:
-
-[source,bash]
-----
-bundle exec rake docker:shell
-----
-
-Inside the container, you can:
-
-* Check extracted packages: `ls /var/lib/capsium/extracted/`
-* View Nginx config: `cat /usr/local/openresty/nginx/conf/nginx.conf`
-* Test configuration: `nginx -t`
-* View error logs: `tail -f /usr/local/openresty/nginx/logs/error.log`
-
-==== Running specific tests
-
-Run only the tests you're working on:
-
-[source,bash]
-----
-# API tests only
-bundle exec rake spec:api
-
-# Package tests only
-bundle exec rake spec:packages
-
-# Configuration tests only
-bundle exec rake spec:config
-
-# Basic functionality tests only
-bundle exec rake spec:basic
-----
-
-==== Generating test reports
-
-Create an HTML test report:
-
-[source,bash]
-----
-bundle exec rake spec:html
-----
-
-The report will be saved to `test-report.html` and can be opened in a browser.
-
-.Example development session
-[example]
-A typical development workflow:
-
-[source,bash]
-----
-# Install dependencies (first time only)
-bundle exec rake install
-
-# Start the server
-bundle exec rake docker:start
-
-# Make changes to lua/capsium/router.lua
-
-# Restart to load changes
-bundle exec rake docker:restart
-
-# Run tests to verify
-bundle exec rake spec
-
-# Check logs if tests fail
-bundle exec rake docker:logs
-
-# Debug in the container if needed
-bundle exec rake docker:shell
-
-# Clean up when done
-bundle exec rake docker:stop
-----
-
-[[automatic-testing]]
-=== Continuous integration
-
-==== General
-
-The project uses GitHub Actions for automated testing with two separate
-workflows:
-
-. **Lua Library Tests** - Unit tests for the core Capsium library using Busted
-. **Nginx Integration Tests** - Full-stack integration tests with OpenResty using RSpec
-
-This separation ensures both the framework-agnostic library and the Nginx
-integration are thoroughly tested.
-
-==== Lua Library Tests workflow
-
-Tests the core Capsium library across multiple Lua versions (5.1, 5.2, 5.3,
-5.4, and LuaJIT).
-
-The workflow automatically:
-
-. Checks out the code
-. Sets up the specified Lua version
-. Installs LuaRocks
-. Installs dependencies from `capsium-dev-1.rockspec`
-. Runs Busted unit tests with coverage
-. Generates and uploads coverage reports
-
-.Running Lua library tests locally
-[source,bash]
-----
-# Install dependencies from rockspec
-luarocks make capsium-dev-1.rockspec --only-deps
-
-# Install test dependencies
-luarocks install busted
-luarocks install luacov
-
-# Run tests with coverage
-busted --verbose --coverage
-
-# Generate coverage report
-luacov
-cat luacov.report.out
-----
-
-==== Nginx Integration Tests workflow
-
-Tests the complete Nginx integration with RSpec, verifying the Reactor layer
-and HTTP serving functionality.
-
-The workflow automatically:
-
-. Checks out the code
-. Sets up Ruby 3.4 with bundler caching
-. Sets up Docker Buildx for building containers
-. Builds the Docker image (installing Capsium via rockspec)
-. Runs all RSpec integration tests
-. Generates and displays test results
-
-.GitHub Actions workflow configuration
-[source,yaml]
-----
-- name: Run tests
-  run: bundle exec rake ci
-
-- name: RSpec Report
-  uses: SonicGarden/rspec-report-action@v6
-  with:
-    json-path: tmp/rspec_results.json
-    title: '# :test_tube: RSpec Test Results'
-  if: always()
-----
-
-The `rake ci` command:
-
-. Builds the Docker image with `luarocks make capsium-dev-1.rockspec`
-. Starts the test container
-. Runs all RSpec tests with JSON output
-. Cleans up containers
-
-The RSpec Report action then processes the JSON output and creates formatted
-reports visible in the GitHub interface.
-
-==== Test reporting
-
-Test results are displayed directly in GitHub:
-
-* **Lua Library Tests**: Coverage reports uploaded as artifacts
-* **Nginx Integration Tests**: Formatted test results in the GitHub Actions
-summary with automatic comments on PRs
-* **Detailed Failure Information**: Stack traces and error messages for debugging
-
-==== Running CI locally
-
-You can run the same workflows locally:
-
-.Lua library tests
-[source,bash]
-----
-busted --verbose --coverage
-----
-
-.Nginx integration tests
-[source,bash]
-----
-bundle exec rake ci
-----
-
-This ensures your changes will pass CI before pushing to GitHub.
-
-=== Test coverage
-
-The test suite includes 28 tests covering:
-
-* Basic functionality (server status, static content)
-* Package extraction and serving
-* Route resolution with custom mount paths
-* Custom headers and CORS configuration
-* Domain-based virtual hosting
-* API introspection endpoints
-* Error handling (404 responses, invalid packages)
-
-All tests must pass before merging pull requests.
-
-.Example test output
-[source]
-----
-API Introspection Endpoints
-  GET /api/v1/introspect/metadata
-    returns metadata for all packages
-  GET /api/v1/introspect/routes
-    returns route information for all packages
-
-Basic Server Functionality
-  server running
-    responds to requests
-  static content
-    serves static content correctly
-
-Configuration
-  custom mount path
-    allows accessing package at custom mount path
-  custom headers
-    applies custom headers from configuration
-
-Capsium Packages
-  package access
-    allows access to Capsium packages
-
-Finished in 0.077 seconds (files took 0.073 seconds to load)
-28 examples, 0 failures
-----
-
-== Troubleshooting
-
-=== Package not found errors
-
-If you see "Package not found" errors in the logs:
-
-. Verify the package file exists in `package_dir`:
-+
-[source,bash]
-----
-ls -la /var/lib/capsium/packages/
-----
-
-. Check that the filename in config exactly matches the file (including `.cap` extension):
-+
-[source,json]
-----
-{
-  "mounts": [
-    {
-      "package": "my-app-1.0.0.cap",  // Must match exactly
-      "path": "/app"
-    }
-  ]
-}
-----
-
-. Verify file permissions allow Nginx to read the package:
-+
-[source,bash]
-----
-sudo chmod 644 /var/lib/capsium/packages/*.cap
-----
-
-=== Route not found (404) errors
-
-If requests return 404 even though the package exists:
-
-. Check the mount path configuration matches your request URL
-. Verify `routes.json` exists in the package and is valid JSON
-. Inspect the package contents:
-+
-[source,bash]
-----
-unzip -l /var/lib/capsium/packages/my-app-1.0.0.cap
-----
-
-. Check Nginx error logs for route resolution details:
-+
-[source,bash]
-----
-tail -f /var/log/nginx/error.log
-----
-
-=== Extraction failures
-
-If packages fail to extract:
-
-. Verify the extract directory is writable:
-+
-[source,bash]
-----
-sudo chown -R nobody:nobody /var/lib/capsium/extracted
-sudo chmod -R 755 /var/lib/capsium/extracted
-----
-
-. Check disk space:
-+
-[source,bash]
-----
-df -h /var/lib/capsium/
-----
-
-. Test manual extraction:
-+
-[source,bash]
-----
-unzip -t /var/lib/capsium/packages/my-app-1.0.0.cap
-----
-
-=== Configuration not loading
-
-If configuration changes aren't taking effect:
-
-. Verify the config file path:
-+
-[source,bash]
-----
-docker exec capsium-lua cat /etc/capsium/config.json
-----
-
-. Check JSON syntax:
-+
-[source,bash]
-----
-python -m json.tool < config/config.json
-----
-
-. Restart OpenResty/Nginx to reload configuration:
-+
-[source,bash]
-----
-docker-compose restart
-# OR
-sudo systemctl restart openresty
-----
+Both run on push/PR, manually, and weekly (Mondays 06:00 UTC).
 
 == License
 
-This project is licensed under the MIT License.
+MIT

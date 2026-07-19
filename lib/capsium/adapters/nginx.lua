@@ -5,7 +5,7 @@ local lfs = require "lfs"
 local zip = require "brimworks.zip"
 
 local _M = {
-  _VERSION = "0.1.0"
+  _VERSION = "0.2.0"
 }
 
 -- File System Adapter for OpenResty/Nginx
@@ -88,6 +88,25 @@ function _M.fs_adapter.read_file(path, mode)
   local content = f:read("*all")
   f:close()
   return content
+end
+
+-- Rename (move) a file or directory; atomic within one filesystem
+function _M.fs_adapter.rename(src, dst)
+  local ok, err = os.rename(src, dst)
+  if not ok then
+    return false, "Failed to rename " .. src .. " -> " .. dst .. ": " ..
+                  (err or "unknown error")
+  end
+  return true
+end
+
+-- Remove a file or an empty directory
+function _M.fs_adapter.remove(path)
+  local ok, err = os.remove(path)
+  if not ok then
+    return false, "Failed to remove " .. path .. ": " .. (err or "unknown error")
+  end
+  return true
 end
 
 -- ZIP Adapter for OpenResty/Nginx

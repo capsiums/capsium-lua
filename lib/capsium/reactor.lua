@@ -1,0 +1,243 @@
+-- Capsium Lua Library
+-- Reactor core: manages a directory of Capsium packages
+-- (framework-agnostic, OOP via metatables)
+--
+-- Packages are lazily extracted (with integrity verification) and loaded on
+-- first use — a cold reactor still answers introspection for every .cap in
+-- the package directory. Loaded packages are memoized per instance and
+-- reloaded automatically when the .cap file changes.
+
+local Package = require "capsium.package.package"
+local Extractor = require "capsium.package.extractor"
+local utils = require "capsium.utils"
+
+local _M = {
+  _VERSION = "0.2.0"
+}
+local _M_mt = { __index = _M }
+
+local function noop_logger() end
+
+-- Create a reactor.
+--   opts.package_dir (required): directory containing .cap files
+--   opts.extract_dir (required): directory packages are extracted to
+--   opts.fs_adapter (required), opts.zip_adapter (required)
+--   opts.hash_fn (optional): sha256 file hash function
+--   opts.logger (optional): function(level, message)
+function _M.new(opts)
+  opts = opts or {}
+
+  if not opts.package_dir then
+    return nil, "package_dir is required"
+  end
+  if not opts.extract_dir then
+    return nil, "extract_dir is required"
+  end
+  if not opts.fs_adapter then
+    return nil, "fs_adapter is required"
+  end
+  if not opts.zip_adapter then
+    return nil, "zip_adapter is required"
+  end
+
+  local extractor = Extractor.new({
+    fs_adapter = opts.fs_adapter,
+    zip_adapter = opts.zip_adapter,
+    hash_fn = opts.hash_fn
+  })
+
+  local self = {
+    package_dir = opts.package_dir,
+    extract_dir = opts.extract_dir,
+    fs_adapter = opts.fs_adapter,
+    hash_fn = opts.hash_fn,
+    extractor = extractor,
+    logger = opts.logger or noop_logger,
+    _memo = {} -- name -> { mtime = n, package = Package } or { mtime = n, error = msg }
+  }
+
+  return setmetatable(self, _M_mt)
+end
+
+-- List .cap packages in the package directory:
+-- array of { name, path, size, modification_time }, sorted by name.
+function _M:list_packages()
+  local fs = self.fs_adapter
+  local packages = {}
+
+  local entries = fs.list_dir(self.package_dir)
+  if not entries then
+    return packages
+  end
+
+  for _, entry in ipairs(entries) do
+    local name = entry:match("^(.+)%.cap$")
+    if name then
+      local path = self.package_dir .. "/" .. entry
+      if fs.file_exists(path) then
+        table.insert(packages, {
+          name = name,
+          path = path,
+          modification_time = fs.get_mtime(path)
+        })
+      end
+    end
+  end
+
+  table.sort(packages, function(a, b) return a.name < b.name end)
+  return packages
+end
+
+-- Get a loaded package by name (without .cap extension).
+-- Lazily extracts (with integrity verification) and loads the package.
+-- Returns Package, or nil, err, status ("not_found" | "error").
+function _M:get_package(name)
+  local fs = self.fs_adapter
+  local package_path = self.package_dir .. "/" .. name .. ".cap"
+
+  if not fs.file_exists(package_path) then
+    return nil, "Package not found: " .. name, "not_found"
+  end
+
+  local mtime = fs.get_mtime(package_path)
+  local memo = self._memo[name]
+  if memo and memo.mtime == mtime then
+    if memo.package then
+      return memo.package
+    end
+    return nil, memo.error, "error"
+  end
+
+  -- Extract (atomic, integrity-verifying)
+  local extract_path, err = self.extractor:extract(package_path,
+                                                   self.extract_dir)
+  if not extract_path then
+    self._memo[name] = { mtime = mtime, error = err }
+    self.logger("error", "Failed to extract " .. name .. ": " ..
+                tostring(err))
+    return nil, err, "error"
+  end
+
+  -- Load the package model
+  local package = Package.new(extract_path, {
+    fs_adapter = fs,
+    hash_fn = self.hash_fn
+  })
+
+  local ok, lerr = package:load()
+  if not ok then
+    self._memo[name] = { mtime = mtime, error = lerr }
+    self.logger("error", "Failed to load " .. name .. ": " .. tostring(lerr))
+    return nil, lerr, "error"
+  end
+
+  self._memo[name] = { mtime = mtime, package = package }
+  return package
+end
+
+-- Forget memoized packages (mainly useful for tests).
+function _M:reset()
+  self._memo = {}
+end
+
+-- ---------------------------------------------------------------------------
+-- Introspection reports (ARCHITECTURE.md section 7)
+-- ---------------------------------------------------------------------------
+
+-- { packages = [{ name, version, author, description }] }
+function _M:metadata_report()
+  local list = {}
+
+  for _, info in ipairs(self:list_packages()) do
+    local package = self:get_package(info.name)
+    if package then
+      local metadata = package:get_metadata()
+      table.insert(list, {
+        name = metadata.name,
+        version = metadata.version,
+        author = metadata.author,
+        description = metadata.description
+      })
+    end
+  end
+
+  return { packages = list }
+end
+
+-- { routes = [{ package, routes = [{ method, path }] }] }
+function _M:routes_report()
+  local list = {}
+
+  for _, info in ipairs(self:list_packages()) do
+    local package = self:get_package(info.name)
+    if package then
+      local entries = {}
+      for _, route in ipairs(package:get_routes()) do
+        table.insert(entries, {
+          method = route.method or "GET",
+          path = route.path
+        })
+      end
+      table.insert(list, {
+        package = info.name,
+        routes = entries
+      })
+    end
+  end
+
+  return { routes = list }
+end
+
+-- { contentHashes = [{ package, hash }] } — SHA-256 of the .cap blob
+function _M:content_hashes_report()
+  local hash_fn = self.hash_fn
+  if not hash_fn then
+    hash_fn = require("capsium.adapters.hash").sha256_file_hex
+  end
+
+  local list = {}
+
+  for _, info in ipairs(self:list_packages()) do
+    local hex, err = hash_fn(info.path)
+    if hex then
+      table.insert(list, { package = info.name, hash = hex })
+    else
+      self.logger("warn", "Failed to hash " .. info.path .. ": " ..
+                  tostring(err))
+    end
+  end
+
+  return { contentHashes = list }
+end
+
+-- { contentValidity = [{ package, valid, lastChecked, reason? }] }
+-- Reports the actual integrity verification result per package.
+function _M:content_validity_report()
+  local list = {}
+  local now = utils.format_timestamp(os.time())
+
+  for _, info in ipairs(self:list_packages()) do
+    local package, err = self:get_package(info.name)
+
+    if not package then
+      table.insert(list, {
+        package = info.name,
+        valid = false,
+        lastChecked = now,
+        reason = err
+      })
+    else
+      local valid, reason = package:verify_integrity()
+      table.insert(list, {
+        package = info.name,
+        valid = valid and true or false,
+        lastChecked = now,
+        reason = reason
+      })
+    end
+  end
+
+  return { contentValidity = list }
+end
+
+return _M

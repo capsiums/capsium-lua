@@ -1,258 +1,294 @@
--- capsium-lua Lua module
--- Main entry point for the Capsium Nginx plugin
-
-local _M = {
-    _VERSION = "0.1.0"
-}
+-- capsium-lua Nginx glue: main entry point
+--
+-- Thin ngx layer over the framework-agnostic core (capsium.reactor,
+-- capsium.package.*). All domain logic lives in lib/capsium; this module
+-- only wires the nginx adapters into the core and translates to/from ngx.
 
 local cjson = require "cjson"
-local extractor = require "capsium.extractor"
-local router = require "capsium.router"
-local utils = require "capsium.utils"
-local config_module = require "capsium.config"
 
--- Initialize the module with configuration
+local config_loader = require "capsium.config"
+local nginx_adapter = require "capsium.adapters.nginx"
+local hash_adapter = require "capsium.adapters.hash"
+local Reactor = require "capsium.reactor"
+
+local _M = {
+  _VERSION = "0.2.0"
+}
+
+local INTROSPECT_PREFIX = "/api/v1/introspect"
+
+-- Module state (set once in init)
+local config
+local reactor
+local cache -- ngx.shared.capsium_cache or nil
+
+local function log(level, ...)
+  ngx.log(level, "Capsium: ", ...)
+end
+
+-- Initialize the module. Called from init_by_lua_block.
 function _M.init(options)
-    -- Initialize configuration
-    local cfg = config_module.init(options)
+  options = options or {}
 
-    -- Ensure directories exist
-    local ok, err = extractor.ensure_dirs(cfg.package_dir, cfg.extract_dir)
-    if not ok then
-        ngx.log(ngx.ERR, "Failed to create Capsium directories: ", err)
-        return false, err
+  config = config_loader.load(options)
+
+  local function ensure_dir(path)
+    if not nginx_adapter.fs_adapter.dir_exists(path) then
+      local ok, err = nginx_adapter.fs_adapter.mkdir_p(path)
+      if not ok then
+        return nil, err
+      end
     end
-
-    -- Store config in module
-    _M.config = cfg
-
-    -- Initialize submodules
-    extractor.init(cfg)
-    router.init(cfg)
-
-    ngx.log(ngx.INFO, "Capsium Nginx plugin initialized with config from: " .. (options.config_path or "default"))
     return true
+  end
+
+  for _, dir in ipairs({ config.package_dir, config.extract_dir }) do
+    local ok, err = ensure_dir(dir)
+    if not ok then
+      log(ngx.ERR, "failed to create directory ", dir, ": ", err)
+      return false, err
+    end
+  end
+
+  reactor = Reactor.new({
+    package_dir = config.package_dir,
+    extract_dir = config.extract_dir,
+    fs_adapter = nginx_adapter.fs_adapter,
+    zip_adapter = nginx_adapter.zip_adapter,
+    hash_fn = hash_adapter.sha256_file_hex,
+    logger = function(level, msg)
+      local ngx_level = level == "warn" and ngx.WARN or ngx.ERR
+      log(ngx_level, msg)
+    end
+  })
+
+  if config.cache_enabled then
+    cache = ngx.shared.capsium_cache
+  end
+
+  _M.config = config
+
+  log(ngx.INFO, "initialized (config: ", config.config_path or "defaults",
+      ", mounts: ", #config.mounts, ")")
+  return true
 end
 
--- Handle incoming request
+-- ---------------------------------------------------------------------------
+-- Response helpers
+-- ---------------------------------------------------------------------------
+
+local function respond_json(status, data)
+  ngx.status = status
+  ngx.header.content_type = "application/json"
+  ngx.say(cjson.encode(data))
+  return ngx.exit(status)
+end
+
+local function respond_error(status, message)
+  return respond_json(status, { error = message })
+end
+
+-- ---------------------------------------------------------------------------
+-- CORS
+-- ---------------------------------------------------------------------------
+
+local function origin_allowed(cors, origin)
+  if not cors or type(cors.allowed_origins) ~= "table" then
+    return false
+  end
+  for _, allowed in ipairs(cors.allowed_origins) do
+    if allowed == "*" or allowed == origin then
+      return true, allowed == "*"
+    end
+  end
+  return false
+end
+
+-- Apply CORS response headers for simple/actual requests.
+local function apply_cors_headers(mount)
+  local cors = mount.cors
+  if not cors then
+    return
+  end
+
+  local origin = ngx.var.http_origin
+  if not origin then
+    return
+  end
+
+  local allowed, wildcard = origin_allowed(cors, origin)
+  if allowed then
+    ngx.header["Access-Control-Allow-Origin"] = wildcard and "*" or origin
+    if type(cors.expose_headers) == "table" then
+      ngx.header["Access-Control-Expose-Headers"] =
+        table.concat(cors.expose_headers, ", ")
+    end
+  end
+end
+
+-- Answer a CORS preflight (OPTIONS) request.
+local function handle_preflight(mount)
+  local cors = mount.cors
+  local origin = ngx.var.http_origin
+  local allowed = origin and origin_allowed(cors, origin)
+
+  if allowed then
+    local _, wildcard = origin_allowed(cors, origin)
+    ngx.header["Access-Control-Allow-Origin"] = wildcard and "*" or origin
+  end
+  if type(cors.allowed_methods) == "table" then
+    ngx.header["Access-Control-Allow-Methods"] =
+      table.concat(cors.allowed_methods, ", ")
+  end
+  if type(cors.allowed_headers) == "table" then
+    ngx.header["Access-Control-Allow-Headers"] =
+      table.concat(cors.allowed_headers, ", ")
+  end
+  if cors.max_age then
+    ngx.header["Access-Control-Max-Age"] = tostring(cors.max_age)
+  end
+
+  ngx.status = ngx.HTTP_NO_CONTENT
+  return ngx.exit(ngx.HTTP_NO_CONTENT)
+end
+
+-- ---------------------------------------------------------------------------
+-- Request handling (package serving)
+-- ---------------------------------------------------------------------------
+
 function _M.handle_request()
-    -- Get the package name from the request
-    local package_name = ngx.var.capsium_package
-    if not package_name then
-        ngx.log(ngx.ERR, "No Capsium package specified")
-        return ngx.exit(ngx.HTTP_NOT_FOUND)
+  local mount, subpath = config_loader.match_mount(config, ngx.var.host,
+                                                   ngx.var.uri)
+  if not mount then
+    return respond_error(ngx.HTTP_NOT_FOUND, "Not found")
+  end
+
+  local method = ngx.req.get_method()
+
+  -- CORS preflight
+  if method == "OPTIONS" and mount.cors then
+    return handle_preflight(mount)
+  end
+
+  -- Package routes are GET-only (HEAD is served like GET, without a body)
+  if method ~= "GET" and method ~= "HEAD" then
+    apply_cors_headers(mount)
+    ngx.header["Allow"] = "GET, HEAD"
+    return respond_error(ngx.HTTP_NOT_ALLOWED,
+                         "Method not allowed")
+  end
+
+  -- Resolve and load the package (lazy extraction + integrity verification)
+  local package, err, status = reactor:get_package(mount.name)
+  if not package then
+    apply_cors_headers(mount)
+    if status == "not_found" then
+      return respond_error(ngx.HTTP_NOT_FOUND, "Package not found")
     end
+    -- Extraction/integrity failure: reject with 5xx and the reason
+    return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR,
+                         tostring(err))
+  end
 
-    -- Strip .cap extension if present (so we can add it consistently)
-    package_name = package_name:gsub("%.cap$", "")
+  -- Resolve the route
+  local target, rerr = package:resolve(subpath)
+  if not target then
+    apply_cors_headers(mount)
+    return respond_error(ngx.HTTP_NOT_FOUND, tostring(rerr))
+  end
 
-    -- Get mount configuration for this package
-    local mount_config = config_module.get_mount_config(package_name)
+  -- Dynamic handler routes are out of scope (ARCHITECTURE.md section 4)
+  if target.kind == "handler" then
+    apply_cors_headers(mount)
+    return respond_error(ngx.HTTP_NOT_IMPLEMENTED,
+                         "Dynamic handler routes are not implemented")
+  end
 
-    -- Check if package exists and extract if needed
-    local package_path = _M.config.package_dir .. "/" .. package_name .. ".cap"
-
-    -- Check if package file exists
-    local lfs = require "lfs"
-    if not lfs.attributes(package_path) then
-        ngx.log(ngx.WARN, "Package not found: ", package_path)
-        return ngx.exit(ngx.HTTP_NOT_FOUND)
+  -- Per-mount custom headers
+  if mount.headers then
+    for name, value in pairs(mount.headers) do
+      ngx.header[name] = value
     end
+  end
+  apply_cors_headers(mount)
 
-    local extract_path, err = extractor.extract_package(package_path, _M.config.extract_dir)
-    if not extract_path then
-        ngx.log(ngx.ERR, "Failed to extract Capsium package: ", err)
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+  if target.kind == "dataset" then
+    local data, derr = package:get_dataset(target.dataset)
+    if not data then
+      return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR, tostring(derr))
     end
-
-    -- Load routes from the extracted package
-    local routes, err = router.load_routes(extract_path)
-    if not routes then
-        ngx.log(ngx.ERR, "Failed to load routes from package: ", err)
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-    end
-
-    -- Get the request path and adjust based on mount path
-    local request_path = ngx.var.uri
-    local mount_path = mount_config.path or "/capsium/" .. package_name
-
-    -- If the request is under the mount path, adjust the path
-    if mount_path ~= "/" and string.sub(request_path, 1, #mount_path) == mount_path then
-        -- Remove the mount path prefix
-        request_path = string.sub(request_path, #mount_path + 1)
-        -- Ensure the path starts with a slash
-        if request_path == "" then
-            request_path = "/"
-        elseif string.sub(request_path, 1, 1) ~= "/" then
-            request_path = "/" .. request_path
-        end
-    end
-
-    -- Resolve the request path to a file
-    local file_path, mime_type = router.resolve_route(routes, request_path, extract_path)
-    if not file_path then
-        ngx.log(ngx.WARN, "Route not found for path: ", request_path)
-        return ngx.exit(ngx.HTTP_NOT_FOUND)
-    end
-
-    -- Apply any custom headers from mount configuration
-    if mount_config.headers then
-        for name, value in pairs(mount_config.headers) do
-            ngx.header[name] = value
-        end
-    end
-
-    -- Serve the file
-    ngx.header.content_type = mime_type or "application/octet-stream"
-
-    -- Read and serve the file content directly
-    local file, err = io.open(file_path, "rb")
-    if not file then
-        ngx.log(ngx.ERR, "Failed to open file: ", file_path, " - ", err)
-        return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
-    end
-
-    local content = file:read("*all")
-    file:close()
-
-    ngx.print(content)
+    ngx.header.content_type = "application/json"
+    ngx.say(cjson.encode(data))
     return ngx.OK
+  end
+
+  -- Static resource
+  ngx.header.content_type = target.mime
+
+  -- Cache-Control: route headers < mount Cache-Control default
+  local cache_control = mount.static_cache_control
+  if target.headers and target.headers["Cache-Control"] then
+    cache_control = target.headers["Cache-Control"]
+  end
+  if not (mount.headers and mount.headers["Cache-Control"]) then
+    ngx.header["Cache-Control"] = cache_control
+  end
+
+  local content, ferr = nginx_adapter.fs_adapter.read_file(target.path, "rb")
+  if not content then
+    return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR,
+                         "Failed to read " .. tostring(target.path) ..
+                         ": " .. tostring(ferr))
+  end
+
+  ngx.print(content)
+  return ngx.OK
 end
 
--- Get metadata for all packages
-function _M.get_metadata()
-    local packages, err = utils.get_packages(_M.config.package_dir)
-    local metadata_list = {}
+-- ---------------------------------------------------------------------------
+-- Introspection API (/api/v1/introspect/*)
+-- ---------------------------------------------------------------------------
 
-    if not packages then
-        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
-        return { packages = cjson.empty_array }
+local introspect_handlers = {
+  ["/metadata"] = function() return reactor:metadata_report() end,
+  ["/routes"] = function() return reactor:routes_report() end,
+  ["/content-hashes"] = function() return reactor:content_hashes_report() end,
+  ["/content-validity"] = function() return reactor:content_validity_report() end
+}
+
+function _M.handle_introspection()
+  if ngx.req.get_method() ~= "GET" then
+    ngx.header["Allow"] = "GET"
+    return respond_error(ngx.HTTP_NOT_ALLOWED,
+                         "Method not allowed")
+  end
+
+  local sub = ngx.var.uri:sub(#INTROSPECT_PREFIX + 1)
+  local handler = introspect_handlers[sub]
+  if not handler then
+    return respond_error(ngx.HTTP_NOT_FOUND, "Not found")
+  end
+
+  -- Shared-dict cache (capsium_cache) with TTL from config
+  local cache_key = "introspect:" .. sub
+  if cache then
+    local cached = cache:get(cache_key)
+    if cached then
+      ngx.header.content_type = "application/json"
+      ngx.say(cached)
+      return ngx.OK
     end
+  end
 
-    for _, package in ipairs(packages) do
-        local extract_path = _M.config.extract_dir .. "/" .. package.name
-        local metadata, err = extractor.get_package_info(extract_path)
+  local body = cjson.encode(handler())
 
-        if metadata then
-            table.insert(metadata_list, {
-                name = metadata.name,
-                version = metadata.version,
-                dependencies = metadata.dependencies,
-                timestamp = utils.format_timestamp(package.modification_time)
-            })
-        end
-    end
+  if cache then
+    cache:set(cache_key, body, config.cache_ttl)
+  end
 
-    -- Ensure empty array is encoded as [] not {}
-    if #metadata_list == 0 then
-        metadata_list = cjson.empty_array
-    end
-    return { packages = metadata_list }
-end
-
--- Get routes for all packages
-function _M.get_routes()
-    local packages, err = utils.get_packages(_M.config.package_dir)
-    local routes_list = {}
-
-    if not packages then
-        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
-        return { routes = cjson.empty_array }
-    end
-
-    for _, package in ipairs(packages) do
-        local extract_path = _M.config.extract_dir .. "/" .. package.name
-        local routes, err = router.load_routes(extract_path)
-
-        if routes then
-            local package_routes = {}
-            for path, route in pairs(routes.routes) do
-                table.insert(package_routes, {
-                    path = path,
-                    target = route.target.file
-                })
-            end
-
-            table.insert(routes_list, {
-                package = package.name,
-                routes = package_routes
-            })
-        end
-    end
-
-    -- Ensure empty array is encoded as [] not {}
-    if #routes_list == 0 then
-        routes_list = cjson.empty_array
-    end
-    return { routes = routes_list }
-end
-
--- Get content hashes for all packages
-function _M.get_content_hashes()
-    local packages, err = utils.get_packages(_M.config.package_dir)
-    local hashes_list = {}
-
-    if not packages then
-        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
-        return { contentHashes = cjson.empty_array }
-    end
-
-    for _, package in ipairs(packages) do
-        local hash, err = utils.calculate_hash(package.path)
-
-        if hash then
-            table.insert(hashes_list, {
-                package = package.name,
-                hash = hash
-            })
-        end
-    end
-
-    -- Ensure empty array is encoded as [] not {}
-    if #hashes_list == 0 then
-        hashes_list = cjson.empty_array
-    end
-    return { contentHashes = hashes_list }
-end
-
--- Get content validity for all packages
-function _M.get_content_validity()
-    local lfs = require "lfs"
-    local packages, err = utils.get_packages(_M.config.package_dir)
-    local validity_list = {}
-
-    if not packages then
-        ngx.log(ngx.ERR, "Failed to get packages: ", err or "unknown error")
-        return { contentValidity = cjson.empty_array }
-    end
-
-    for _, package in ipairs(packages) do
-        local extract_path = _M.config.extract_dir .. "/" .. package.name
-        local metadata_path = extract_path .. "/metadata.json"
-
-        -- Check if metadata.json exists
-        local valid = false
-        local reason = nil
-
-        if lfs.attributes(metadata_path) then
-            valid = true
-        else
-            reason = "Missing metadata.json"
-        end
-
-        table.insert(validity_list, {
-            package = package.name,
-            valid = valid,
-            lastChecked = utils.format_timestamp(os.time()),
-            reason = reason
-        })
-    end
-
-    -- Ensure empty array is encoded as [] not {}
-    if #validity_list == 0 then
-        validity_list = cjson.empty_array
-    end
-    return { contentValidity = validity_list }
+  ngx.header.content_type = "application/json"
+  ngx.say(body)
+  return ngx.OK
 end
 
 return _M

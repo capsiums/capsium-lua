@@ -10,6 +10,8 @@ local config_loader = require "capsium.config"
 local nginx_adapter = require "capsium.adapters.nginx"
 local hash_adapter = require "capsium.adapters.hash"
 local auth_gate = require "capsium.auth_gate"
+local utils = require "capsium.utils"
+local LogBuffer = require "capsium.log_buffer"
 local Reactor = require "capsium.reactor"
 local Registry = require "capsium.registry"
 
@@ -24,6 +26,9 @@ local config
 local reactor
 local cache -- ngx.shared.capsium_cache or nil
 local registries = {} -- registry ref -> Registry instance | nil, err memo
+local started_at -- epoch seconds when the reactor initialized
+local metrics -- ngx.shared.capsium_metrics or nil
+local log_buffer -- per-worker ring buffer for /package/<name>/logs
 
 local function log(level, ...)
   ngx.log(level, "Capsium: ", ...)
@@ -158,6 +163,12 @@ function _M.init(options)
   if config.cache_enabled then
     cache = ngx.shared.capsium_cache
   end
+
+  -- Reactor introspection state: uptime base, shared-dict request
+  -- counters and the per-worker request log ring buffer
+  started_at = os.time()
+  metrics = ngx.shared.capsium_metrics
+  log_buffer = LogBuffer.new()
 
   -- Registry-backed mounts (capsium:// sources): surface configuration
   -- problems at startup. The resolve/download itself is lazy (first
@@ -450,6 +461,196 @@ function _M.handle_introspection()
   ngx.header.content_type = "application/json"
   ngx.say(body)
   return ngx.OK
+end
+
+-- ---------------------------------------------------------------------------
+-- Reactor-level + per-package introspection (07-reactor follow-ons)
+-- ---------------------------------------------------------------------------
+
+-- Request bookkeeping, called from log_by_lua (after the response was
+-- sent): shared-dict counters for /introspect/metrics and a per-worker
+-- ring-buffer line for /package/<name>/logs.
+function _M.record_request()
+  local status = ngx.status or 0
+
+  if metrics then
+    metrics:incr("total", 1, 0)
+    metrics:incr("status:" .. tostring(status), 1, 0)
+  end
+
+  if log_buffer then
+    log_buffer:add(string.format("%s %s -> %d", ngx.req.get_method(),
+                                 ngx.var.request_uri, status))
+  end
+end
+
+-- { requestsTotal = n, requestsByStatus = { code = n } } from the
+-- capsium_metrics shared dict (counts every Lua-handled request on all
+-- workers).
+local function metrics_snapshot()
+  local by_status = {}
+  local total = 0
+
+  if metrics then
+    total = metrics:get("total") or 0
+    for _, key in ipairs(metrics:get_keys(0)) do
+      local code = key:match("^status:(%d+)$")
+      if code then
+        by_status[code] = metrics:get(key) or 0
+      end
+    end
+  end
+
+  return { requestsTotal = total, requestsByStatus = by_status }
+end
+
+-- The reactor configuration report. Built from a whitelist so deploy
+-- secrets (authentication.*, encryption key paths) can never leak;
+-- registry URL userinfo is redacted.
+local function config_report()
+  local mounts = {}
+  for _, mount in ipairs(config.mounts) do
+    local entry = { path = mount.path }
+    if mount.source_guid then
+      entry.package = mount.source_guid
+      if mount.version_constraint ~= "*" then
+        entry.version = mount.version_constraint
+      end
+    else
+      entry.package = mount.package
+    end
+    if mount.domain then
+      entry.domain = mount.domain
+    end
+    if type(mount.registry) == "string" then
+      entry.registry = utils.redact_url(mount.registry)
+    end
+    if type(mount.store) == "string" then
+      entry.store = mount.store
+    end
+    table.insert(mounts, entry)
+  end
+
+  local deploy = _M.deploy_authentication or {}
+
+  return {
+    mounts = mounts,
+    registry = config.registry and utils.redact_url(config.registry)
+               or cjson.null,
+    storeDir = config.store_dir,
+    cache = {
+      enabled = config.cache_enabled and true or false,
+      ttl = config.cache_ttl
+    },
+    authEnabled = deploy.session_secret ~= nil
+                  or deploy.oauth2_client_secret ~= nil
+  }
+end
+
+-- GET-only reactor-level reports:
+--   /introspect/status  { status, uptime, packagesLoaded }
+--   /introspect/config  redacted configuration
+--   /introspect/metrics { uptime, requestsTotal, requestsByStatus }
+function _M.handle_reactor_introspection()
+  if ngx.req.get_method() ~= "GET" then
+    ngx.header["Allow"] = "GET"
+    return respond_error(ngx.HTTP_NOT_ALLOWED, "Method not allowed")
+  end
+
+  local uri = ngx.var.uri
+  if uri == "/introspect/status" then
+    return respond_json(ngx.HTTP_OK,
+                        Reactor.status_report(started_at, #config.mounts))
+  end
+  if uri == "/introspect/config" then
+    return respond_json(ngx.HTTP_OK, config_report())
+  end
+  if uri == "/introspect/metrics" then
+    return respond_json(ngx.HTTP_OK,
+                        Reactor.metrics_report(started_at,
+                                               metrics_snapshot()))
+  end
+  return respond_error(ngx.HTTP_NOT_FOUND, "Not found")
+end
+
+-- Find the mount + loaded package for a package metadata name (registry
+-- mounts resolve lazily so their name becomes known). Returns
+-- mount, package | nil.
+local function find_mounted_package(name)
+  for _, mount in ipairs(config.mounts) do
+    if mount.source_guid and not mount.source_file then
+      resolve_registry_mount(mount)
+    end
+    if mount.name then
+      local package = reactor:get_package(mount.name, {
+        encryption = mount.encryption,
+        source_file = mount.source_file
+      })
+      if package then
+        local metadata = package:get_metadata()
+        if metadata and metadata.name == name then
+          return mount, package
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Per-package reports, resolved by package metadata name (404 for
+-- unknown names):
+--   /package/<name>/status|metadata|logs
+-- GET-only; the CORS policy of the mount serving the package applies.
+local PACKAGE_PATH_PATTERN = "^/package/([^/]+)/([^/]+)$"
+local DEFAULT_LOG_LINES = 100
+local MAX_LOG_LINES = 1000
+
+function _M.handle_package_introspection()
+  local name, report = ngx.var.uri:match(PACKAGE_PATH_PATTERN)
+  if not name or (report ~= "status" and report ~= "metadata"
+                  and report ~= "logs") then
+    return respond_error(ngx.HTTP_NOT_FOUND, "Not found")
+  end
+
+  local mount, package = find_mounted_package(name)
+
+  if mount and mount.cors and ngx.req.get_method() == "OPTIONS" then
+    return handle_preflight(mount)
+  end
+
+  if ngx.req.get_method() ~= "GET" then
+    if mount then
+      apply_cors_headers(mount)
+    end
+    ngx.header["Allow"] = "GET"
+    return respond_error(ngx.HTTP_NOT_ALLOWED, "Method not allowed")
+  end
+
+  if not package then
+    return respond_error(ngx.HTTP_NOT_FOUND, "Package not found: " .. name)
+  end
+
+  apply_cors_headers(mount)
+
+  if report == "status" then
+    return respond_json(ngx.HTTP_OK, Reactor.package_status_report(package))
+  end
+  if report == "metadata" then
+    return respond_json(ngx.HTTP_OK,
+                        Reactor.package_metadata_report(package))
+  end
+
+  -- logs: recent ring-buffer lines (oldest first), ?lines=N clamped
+  local count = DEFAULT_LOG_LINES
+  local raw = ngx.req.get_uri_args().lines
+  if type(raw) == "string" and raw:match("^%d+$") then
+    count = tonumber(raw)
+  end
+  count = math.min(math.max(count, 1), MAX_LOG_LINES)
+
+  local lines = log_buffer and log_buffer:lines(count) or {}
+  return respond_json(ngx.HTTP_OK,
+                      Reactor.package_logs_report(package, lines))
 end
 
 return _M

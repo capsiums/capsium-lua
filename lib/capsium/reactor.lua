@@ -386,4 +386,66 @@ function _M:content_validity_report()
   return { contentValidity = list }
 end
 
+-- ---------------------------------------------------------------------------
+-- Reactor-level + per-package introspection (07-reactor follow-ons)
+-- ---------------------------------------------------------------------------
+-- Report shapers are module-level functions: the ngx glue assembles the
+-- inputs (config, shared-dict metrics, log buffer) and these produce the
+-- canonical response bodies (parity with the Ruby gem's
+-- Reactor::Introspection).
+
+-- { status = "running", uptime = <seconds>, packagesLoaded = n }
+function _M.status_report(started_at, packages_loaded)
+  return {
+    status = "running",
+    uptime = math.max(0, os.time() - (started_at or os.time())),
+    packagesLoaded = packages_loaded
+  }
+end
+
+-- { uptime, requestsTotal, requestsByStatus } — the request counters
+-- come from the caller (shared-dict snapshot in the ngx glue).
+function _M.metrics_report(started_at, snapshot)
+  snapshot = snapshot or {}
+  return {
+    uptime = math.max(0, os.time() - (started_at or os.time())),
+    requestsTotal = snapshot.requestsTotal or 0,
+    requestsByStatus = snapshot.requestsByStatus or {}
+  }
+end
+
+-- { package, version, status = "loaded", valid }
+function _M.package_status_report(package)
+  local metadata = package:get_metadata()
+  local valid = package:verify_integrity()
+  return {
+    package = metadata.name,
+    version = metadata.version,
+    status = "loaded",
+    valid = valid and true or false
+  }
+end
+
+-- { name, version, description, author, guid }
+function _M.package_metadata_report(package)
+  local metadata = package:get_metadata()
+  return {
+    name = metadata.name,
+    version = metadata.version,
+    description = metadata.description,
+    author = metadata.author,
+    guid = metadata.guid
+  }
+end
+
+-- { package, logs = [line, ...] } — the lines come from the caller's
+-- log buffer (recent ring-buffer lines, oldest first).
+function _M.package_logs_report(package, lines)
+  local metadata = package:get_metadata()
+  return {
+    package = metadata.name,
+    logs = lines or {}
+  }
+end
+
 return _M

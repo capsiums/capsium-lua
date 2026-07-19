@@ -71,6 +71,27 @@ function _M.format_timestamp(timestamp)
   return os.date("!%Y-%m-%dT%H:%M:%SZ", timestamp)
 end
 
+-- Strip any userinfo (credentials) from an http(s) URL reference
+-- (mirrors the Ruby reactor's config-report redaction); non-URL
+-- references are returned unchanged.
+function _M.redact_url(ref)
+  if type(ref) ~= "string" then
+    return ref
+  end
+
+  local scheme, rest = ref:match("^(https?://)(.+)$")
+  if not scheme then
+    return ref
+  end
+
+  local authority, tail = rest:match("^([^/]*)(.*)$")
+  local host = authority and authority:match("^[^@]*@(.*)$")
+  if host then
+    return scheme .. host .. tail
+  end
+  return ref
+end
+
 -- Deep copy a table
 function _M.deep_copy(orig)
   local orig_type = type(orig)

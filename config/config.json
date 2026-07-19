@@ -35,6 +35,14 @@
     {
       "package": "canonical-tampered-1.0.0.cap",
       "path": "/broken"
+    },
+    {
+      "package": "signed-sample-1.0.0.cap",
+      "path": "/signed"
+    },
+    {
+      "package": "signed-tampered-1.0.0.cap",
+      "path": "/signed-broken"
     }
   ]
 }

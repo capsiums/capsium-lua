@@ -18,6 +18,8 @@ local _M_mt = { __index = _M }
 --   opts.fs_adapter (required): file system adapter
 --   opts.zip_adapter (required): zip archive adapter
 --   opts.hash_fn (optional): function(file_path) -> sha256 hex
+--   opts.crypto (optional): crypto module for signature verification and
+--     package decryption (defaults to capsium.crypto)
 function _M.new(opts)
   opts = opts or {}
 
@@ -31,7 +33,8 @@ function _M.new(opts)
   local self = {
     fs_adapter = opts.fs_adapter,
     zip_adapter = opts.zip_adapter,
-    hash_fn = opts.hash_fn
+    hash_fn = opts.hash_fn,
+    crypto = opts.crypto
   }
 
   return setmetatable(self, _M_mt)
@@ -40,6 +43,11 @@ end
 -- Default hash function (lazy require to keep the adapter swappable)
 local function default_hash_fn()
   return require("capsium.adapters.hash").sha256_file_hex
+end
+
+-- Default crypto module (lazy require to keep it swappable)
+local function default_crypto()
+  return require "capsium.crypto"
 end
 
 -- Remove a directory tree using fs adapter primitives.
@@ -198,9 +206,10 @@ function _M:extract(package_path, extract_dir)
     return fail("Extracted package has an invalid metadata.json")
   end
 
-  -- Integrity verification (section 6): reject on checksum mismatch
+  -- Integrity verification (section 6/6a): reject on checksum or
+  -- signature mismatch
   local verified, reason = security.verify(tmp_path, fs,
-    self.hash_fn or default_hash_fn())
+    self.hash_fn or default_hash_fn(), self.crypto or default_crypto())
   if not verified then
     return fail(reason or "Integrity check failed")
   end

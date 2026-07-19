@@ -8,6 +8,14 @@ RUN apk add --no-cache \
     zip \
     unzip
 
+# lua-resty-openssl (FFI) resolves OpenSSL symbols from the global namespace.
+# Inside nginx workers they are already there (nginx links libcrypto); under
+# plain LuaJIT (busted) its loader needs libcrypto.so/libssl.so path names —
+# symlink them to the image's own OpenSSL 3 libraries. No openssl binary is
+# needed (and `openssl enc` could not do AES-GCM anyway).
+RUN ln -sf /usr/local/openresty/openssl3/lib/libcrypto.so.3 /usr/lib/libcrypto.so && \
+    ln -sf /usr/local/openresty/openssl3/lib/libssl.so.3 /usr/lib/libssl.so
+
 # Install Capsium via rockspec (includes all Lua dependencies)
 COPY capsium-0.2.0-1.rockspec /tmp/
 COPY lib/ /tmp/lib/

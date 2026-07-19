@@ -63,6 +63,50 @@ describe("Capsium Utils", function()
     end)
   end)
 
+  describe("base64_encode / base64_decode", function()
+    it("round-trips RFC 4648 test vectors", function()
+      assert.equals("", utils.base64_encode(""))
+      assert.equals("Zg==", utils.base64_encode("f"))
+      assert.equals("Zm8=", utils.base64_encode("fo"))
+      assert.equals("Zm9v", utils.base64_encode("foo"))
+      assert.equals("Zm9vYg==", utils.base64_encode("foob"))
+      assert.equals("Zm9vYmE=", utils.base64_encode("fooba"))
+      assert.equals("Zm9vYmFy", utils.base64_encode("foobar"))
+
+      assert.equals("", utils.base64_decode(""))
+      assert.equals("f", utils.base64_decode("Zg=="))
+      assert.equals("fo", utils.base64_decode("Zm8="))
+      assert.equals("foo", utils.base64_decode("Zm9v"))
+      assert.equals("foob", utils.base64_decode("Zm9vYg=="))
+      assert.equals("fooba", utils.base64_decode("Zm9vYmE="))
+      assert.equals("foobar", utils.base64_decode("Zm9vYmFy"))
+    end)
+
+    it("round-trips binary data of every byte value", function()
+      local bin = {}
+      for i = 0, 255 do
+        bin[#bin + 1] = string.char(i)
+      end
+      local data = table.concat(bin)
+
+      assert.equals(data, utils.base64_decode(utils.base64_encode(data)))
+    end)
+
+    it("handles unpadded input and whitespace", function()
+      assert.equals("foobar", utils.base64_decode("Zm9vYmFy"))
+      assert.equals("foobar", utils.base64_decode(" Zm9v\nYmFy "))
+    end)
+
+    it("rejects invalid input", function()
+      local ok, err = utils.base64_decode("!!!")
+      assert.is_nil(ok)
+      assert.is_truthy(tostring(err):find("base64"))
+
+      local ok2 = utils.base64_decode("A")
+      assert.is_nil(ok2)
+    end)
+  end)
+
   describe("file_exists", function()
     it("returns true for existing files", function()
       -- .busted file should exist

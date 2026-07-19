@@ -33,6 +33,9 @@ spec/fixtures/canonical-sample-1.0.0.cap
 spec/fixtures/canonical-tampered-1.0.0.cap
 spec/fixtures/multi-test-1.0.0.cap
 spec/fixtures/dormant-package-0.1.0.cap
+spec/fixtures/signed-sample-1.0.0.cap
+spec/fixtures/signed-tampered-1.0.0.cap
+spec/fixtures/keys/
 
 # Extracted packages cache
 extracted/

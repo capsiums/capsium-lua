@@ -28,7 +28,8 @@ dependencies = {
    "lua >= 5.1",
    "luafilesystem >= 1.8.0",
    "lua-cjson >= 2.1.0",
-   "lua-zip >= 0.2"
+   "lua-zip >= 0.2",
+   "lua-resty-openssl >= 1.3"
 }
 
 build = {
@@ -38,6 +39,7 @@ build = {
       ["capsium.utils"] = "lib/capsium/utils.lua",
       ["capsium.mime"] = "lib/capsium/mime.lua",
       ["capsium.csv"] = "lib/capsium/csv.lua",
+      ["capsium.crypto"] = "lib/capsium/crypto.lua",
 
       -- Reactor core
       ["capsium.reactor"] = "lib/capsium/reactor.lua",

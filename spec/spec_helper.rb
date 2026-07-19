@@ -1,6 +1,7 @@
 require 'net/http'
 require 'uri'
 require 'json'
+require 'digest'
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|
@@ -29,6 +30,23 @@ class ApiClient
     Net::HTTP.start(uri.hostname, uri.port) do |http|
       http.request(request)
     end
+  end
+
+  def request(method, path, headers = {})
+    uri = URI.join(base_url, path)
+    request = Net::HTTP.const_get(method.to_s.capitalize).new(uri, headers)
+
+    Net::HTTP.start(uri.hostname, uri.port) do |http|
+      http.request(request)
+    end
+  end
+
+  def post(path, headers = {})
+    request(:post, path, headers)
+  end
+
+  def options(path, headers = {})
+    request(:options, path, headers)
   end
 
   def get_with_host(path, host)

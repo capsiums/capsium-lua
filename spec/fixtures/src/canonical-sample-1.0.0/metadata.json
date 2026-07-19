@@ -1,0 +1,10 @@
+{
+  "name": "canonical-sample",
+  "version": "1.0.0",
+  "description": "Canonical-format Capsium sample package",
+  "guid": "https://github.com/capsiums/capsium-lua",
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

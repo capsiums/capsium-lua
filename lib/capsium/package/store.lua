@@ -14,7 +14,7 @@ local cjson = require "cjson"
 local semver = require "capsium.semver"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 local _M_mt = { __index = _M }
 

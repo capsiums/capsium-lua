@@ -5,7 +5,7 @@ local lfs = require "lfs"
 local zip = require "brimworks.zip"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- File System Adapter for OpenResty/Nginx

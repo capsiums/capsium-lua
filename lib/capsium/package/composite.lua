@@ -10,7 +10,7 @@
 -- longest guid wins (mirrors @capsium/core composite.ts).
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 local CAPSIUM_SCHEME = "capsium://"

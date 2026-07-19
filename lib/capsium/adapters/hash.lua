@@ -8,7 +8,7 @@
 --      Lua 5.2 via bit32, Lua 5.3/5.4 via native operators, LuaJIT)
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 local MOD = 4294967296 -- 2^32

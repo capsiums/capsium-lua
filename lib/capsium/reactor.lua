@@ -13,7 +13,7 @@ local Store = require "capsium.package.store"
 local utils = require "capsium.utils"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 local _M_mt = { __index = _M }
 

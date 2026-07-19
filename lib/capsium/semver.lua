@@ -10,7 +10,7 @@
 -- dependency normalization emits "*" for missing ranges).
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- Parse "1.2.3" (optional leading v, optional pre-release/build suffix).

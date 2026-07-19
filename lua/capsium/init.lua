@@ -16,7 +16,7 @@ local Reactor = require "capsium.reactor"
 local Registry = require "capsium.registry"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 local INTROSPECT_PREFIX = "/api/v1/introspect"

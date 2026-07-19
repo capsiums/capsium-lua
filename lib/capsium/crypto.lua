@@ -23,7 +23,7 @@
 -- can decide how to degrade (packages requiring crypto are rejected).
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- OAEP padding constant (RSA_PKCS1_OAEP_PADDING in OpenSSL)

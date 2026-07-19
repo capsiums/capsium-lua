@@ -1,5 +1,5 @@
 package = "capsium"
-version = "0.3.0-1"
+version = "0.4.0-1"
 
 source = {
    url = "git+https://github.com/capsiums/capsium-lua.git"
@@ -19,6 +19,10 @@ description = {
       - Layered storage with tombstones (section 5a)
       - Composite packages: store resolution + route inheritance (section 4a)
       - Authentication: basicAuth, OAuth2+PKCE, dataset accessControl (4b)
+      - Static registry pull: capsium:// mount sources resolved via
+        index.json (newest satisfying semver, sha256-verified install)
+      - Reactor + per-package introspection: /introspect/status|config|
+        metrics and /package/<name>/status|metadata|logs (07-reactor)
       - Manifest-driven route auto-generation
       - Reactor layer for HTTP serving with introspection API
       - Nginx/OpenResty adapter included

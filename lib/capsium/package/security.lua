@@ -13,7 +13,7 @@
 local cjson = require "cjson"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- Default package-relative signature file name (per the standard)

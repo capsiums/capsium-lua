@@ -2,7 +2,7 @@
 -- MIME type detection (framework-agnostic, single source of truth)
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- Extension to MIME type mapping.

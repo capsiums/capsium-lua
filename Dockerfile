@@ -17,9 +17,9 @@ RUN ln -sf /usr/local/openresty/openssl3/lib/libcrypto.so.3 /usr/lib/libcrypto.s
     ln -sf /usr/local/openresty/openssl3/lib/libssl.so.3 /usr/lib/libssl.so
 
 # Install Capsium via rockspec (includes all Lua dependencies)
-COPY capsium-0.3.0-1.rockspec /tmp/
+COPY capsium-0.4.0-1.rockspec /tmp/
 COPY lib/ /tmp/lib/
-RUN cd /tmp && luarocks make capsium-0.3.0-1.rockspec && rm -rf /tmp/*
+RUN cd /tmp && luarocks make capsium-0.4.0-1.rockspec && rm -rf /tmp/*
 
 # Create Capsium directories and set permissions for nginx user (nobody)
 RUN mkdir -p /var/lib/capsium/packages && \

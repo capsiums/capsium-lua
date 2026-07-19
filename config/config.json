@@ -4,6 +4,7 @@
   "cache_enabled": true,
   "cache_ttl": 3600,
   "log_level": "info",
+  "registry": "/var/lib/capsium/registry",
   "encryption": {
     "privateKeyPath": "/var/lib/capsium/packages/keys/private.pem"
   },
@@ -73,6 +74,15 @@
     {
       "package": "composite-sample-1.0.0.cap",
       "path": "/composite"
+    },
+    {
+      "package": "capsium://fixtures/registry-app",
+      "path": "/registry-app",
+      "version": ">=1.0.0"
+    },
+    {
+      "package": "capsium://fixtures/registry-tampered",
+      "path": "/registry-tampered"
     },
     {
       "package": "auth-sample-1.0.0.cap",

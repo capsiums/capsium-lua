@@ -69,9 +69,19 @@ end
 local function build_mount_view(raw)
   local view = utils.deep_copy(raw)
 
-  -- Normalize the package reference to a bare name (no .cap extension)
+  -- Normalize the package reference: either a bare .cap name from
+  -- package_dir, or a capsium://<guid> registry reference resolved
+  -- lazily at request time (per-mount "registry"/"store" override the
+  -- reactor-level defaults; "version" is the semver range, default "*").
   if type(view.package) == "string" then
-    view.name = view.package:gsub("%.cap$", "")
+    if view.package:sub(1, 10) == "capsium://" then
+      view.source_guid = view.package
+      view.version_constraint = type(view.version) == "string"
+                                and view.version or "*"
+      view.name = nil -- unknown until resolved from the registry index
+    else
+      view.name = view.package:gsub("%.cap$", "")
+    end
   end
 
   view.path = view.path or (view.name and ("/capsium/" .. view.name))
@@ -130,11 +140,17 @@ function _M.load(options)
     config.store_dir = env_store
   end
 
+  -- The default package registry (mount "registry" overrides per mount)
+  local env_registry = os.getenv("CAPSIUM_REGISTRY")
+  if env_registry and env_registry ~= "" then
+    config.registry = env_registry
+  end
+
   -- Precompute mount views from the mounts array
   local mounts = {}
   for _, mount in ipairs(config.mounts or {}) do
     local view = build_mount_view(mount)
-    if view.name and view.path then
+    if (view.name or view.source_guid) and view.path then
       table.insert(mounts, view)
     end
   end
@@ -152,7 +168,7 @@ function _M.load(options)
           if type(data) == "table" then
             data.package = data.package or name
             local view = build_mount_view(data)
-            if view.name and view.path then
+            if (view.name or view.source_guid) and view.path then
               table.insert(mounts, view)
             end
           end

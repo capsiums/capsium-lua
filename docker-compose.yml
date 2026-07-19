@@ -6,14 +6,18 @@ services:
     ports:
       - "8080:80"
     volumes:
-      # Mount Capsium packages directory
-      - ./test/fixtures:/var/lib/capsium/packages
+      # Mount Capsium packages directory (run `rake fixtures` first to
+      # build the generated .cap fixtures)
+      - ./spec/fixtures:/var/lib/capsium/packages
       # Mount Lua modules for development
+      - ./lib/capsium:/usr/local/openresty/luajit/share/lua/5.1/capsium
       - ./lua/capsium:/etc/nginx/lua/capsium
       # Mount Nginx configuration for development
       - ./nginx/conf.d:/etc/nginx/conf.d
       # Mount configuration directory
       - ./config:/etc/capsium
+      # Static welcome page
+      - ./spec/static:/var/lib/capsium/static
     environment:
       - NGINX_HOST=localhost
       - NGINX_PORT=80

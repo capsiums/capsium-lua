@@ -3,7 +3,8 @@ require 'rspec/core/rake_task'
 # Configuration
 CONTAINER_NAME = 'capsium-nginx-test'
 IMAGE_NAME = 'capsium-nginx:test'
-BASE_IMAGE = 'openresty/openresty:alpine-fat'
+# Keep in sync with the BASE_IMAGE ARG in the Dockerfile
+BASE_IMAGE = 'openresty/openresty:1.27.1.2-12-alpine-fat'
 DOCKER_PORT = '8080:80'
 
 # Helper methods
@@ -38,6 +39,32 @@ task default: :test
 desc "Install Ruby dependencies"
 task :install do
   sh "bundle install"
+end
+
+# Build generated .cap fixtures (canonical, tampered, multi, dormant)
+desc "Build generated .cap test fixtures"
+task :fixtures do
+  sh "ruby spec/fixtures/build_fixtures.rb"
+end
+
+# Lua unit tests and lint, run inside the Docker image
+namespace :lua do
+  desc "Run busted unit tests inside Docker"
+  task :test => 'docker:build' do
+    sh <<~SH
+      docker run --rm -v #{Dir.pwd}:/src -w /src #{IMAGE_NAME} sh -c \
+        'luarocks install busted > /dev/null && \
+         luarocks install luacov > /dev/null && busted --verbose'
+    SH
+  end
+
+  desc "Run luacheck inside Docker"
+  task :lint => 'docker:build' do
+    sh <<~SH
+      docker run --rm -v #{Dir.pwd}:/src -w /src #{IMAGE_NAME} sh -c \
+        'luarocks install luacheck > /dev/null && luacheck lib lua test'
+    SH
+  end
 end
 
 # Docker tasks
@@ -164,14 +191,15 @@ namespace :spec do
 end
 
 # Combined workflow tasks
-desc "Run tests (ensures container is running)"
-task test: ['docker:start', :spec]
+desc "Run tests (ensures fixtures and container are ready)"
+task test: [:fixtures, 'docker:start', :spec]
 
-desc "CI workflow: build, start, test, cleanup"
+desc "CI workflow: fixtures, build, start, test, cleanup"
 task :ci do
   begin
     # Ensure tmp directory exists for JSON report
     FileUtils.mkdir_p('tmp')
+    Rake::Task[:fixtures].invoke
     Rake::Task['docker:build'].invoke
     Rake::Task['docker:start'].invoke
     Rake::Task['spec:ci_report'].invoke

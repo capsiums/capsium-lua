@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=openresty/openresty:alpine-fat
+ARG BASE_IMAGE=openresty/openresty:1.27.1.2-12-alpine-fat
 FROM ${BASE_IMAGE}
 
 # Install system dependencies
@@ -9,9 +9,9 @@ RUN apk add --no-cache \
     unzip
 
 # Install Capsium via rockspec (includes all Lua dependencies)
-COPY capsium-dev-1.rockspec /tmp/
+COPY capsium-0.2.0-1.rockspec /tmp/
 COPY lib/ /tmp/lib/
-RUN cd /tmp && luarocks make capsium-dev-1.rockspec && rm -rf /tmp/*
+RUN cd /tmp && luarocks make capsium-0.2.0-1.rockspec && rm -rf /tmp/*
 
 # Create Capsium directories and set permissions for nginx user (nobody)
 RUN mkdir -p /var/lib/capsium/packages && \
@@ -21,7 +21,7 @@ RUN mkdir -p /var/lib/capsium/packages && \
     chown -R nobody:nobody /var/lib/capsium && \
     chown -R nobody:nobody /var/log/nginx
 
-# Copy Nginx-specific Reactor layer (not in rockspec yet)
+# Copy Nginx-specific glue layer (capsium entry + config loading)
 COPY lua/capsium /etc/nginx/lua/capsium
 
 # Copy Nginx configuration

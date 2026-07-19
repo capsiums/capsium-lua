@@ -4,13 +4,20 @@
 -- Extraction is atomic: archives unpack into a temporary directory that is
 -- renamed into place only after metadata.json parses and security.json
 -- checksums verify (ARCHITECTURE.md section 6, reject on mismatch).
+--
+-- Encrypted packages (section 6b: metadata.json + signature.json +
+-- package.enc) are detected by their zip listing and decrypted first: the
+-- RSA-OAEP-SHA256-wrapped DEK is unwrapped with the configured private
+-- key, package.enc is AES-256-GCM-decrypted, and the resulting inner zip
+-- is extracted exactly like a plaintext package.
 
 local cjson = require "cjson"
 
 local security = require "capsium.package.security"
+local decrypter = require "capsium.package.decrypter"
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 local _M_mt = { __index = _M }
 
@@ -20,6 +27,8 @@ local _M_mt = { __index = _M }
 --   opts.hash_fn (optional): function(file_path) -> sha256 hex
 --   opts.crypto (optional): crypto module for signature verification and
 --     package decryption (defaults to capsium.crypto)
+--   opts.encryption (optional): { private_key_path = ... } — default key
+--     for encrypted packages; overridable per extract call
 function _M.new(opts)
   opts = opts or {}
 
@@ -34,7 +43,8 @@ function _M.new(opts)
     fs_adapter = opts.fs_adapter,
     zip_adapter = opts.zip_adapter,
     hash_fn = opts.hash_fn,
-    crypto = opts.crypto
+    crypto = opts.crypto,
+    encryption = opts.encryption
   }
 
   return setmetatable(self, _M_mt)
@@ -77,9 +87,24 @@ function _M:remove_tree(path)
   return fs.remove(path)
 end
 
+-- The effective private key path for one extraction: per-call override
+-- first, then the extractor-level default; "" means none (plaintext).
+function _M:effective_key_path(call_opts)
+  local encryption = (call_opts and call_opts.encryption)
+                     or self.encryption
+  return (encryption and encryption.private_key_path) or ""
+end
+
+-- Sidecar recording which decryption key produced an extraction, so the
+-- up-to-date check never serves a package decrypted with a different key
+-- (e.g. the same package mounted with per-mount key overrides).
+local function keyid_path(extract_dir, package_name)
+  return extract_dir .. "/." .. package_name .. ".keyid"
+end
+
 -- Check whether a package is already extracted and up to date.
 -- Returns true, extract_path when usable; false, reason otherwise.
-function _M:is_extracted(package_path, extract_dir)
+function _M:is_extracted(package_path, extract_dir, call_opts)
   local fs = self.fs_adapter
 
   if not fs.file_exists(package_path) then
@@ -109,18 +134,27 @@ function _M:is_extracted(package_path, extract_dir)
     return false, "Package file is newer than extracted files"
   end
 
+  -- The extraction must have been produced with the same key config
+  local recorded = fs.read_file(keyid_path(extract_dir, package_name)) or ""
+  if recorded ~= self:effective_key_path(call_opts) then
+    return false, "Decryption key config changed"
+  end
+
   return true, extract_path
 end
 
 -- Extract a Capsium package (.cap zip) into extract_dir/<name>.
+--   call_opts.encryption (optional): { private_key_path = ... } override
+--     for encrypted packages (per-package key config)
 -- Returns extract_path or nil, err. On integrity mismatch the package is
 -- rejected: nothing is left at the final extract path.
-function _M:extract(package_path, extract_dir)
+function _M:extract(package_path, extract_dir, call_opts)
   local fs = self.fs_adapter
   local zip = self.zip_adapter
 
-  -- Already extracted and up to date?
-  local is_extracted, result = self:is_extracted(package_path, extract_dir)
+  -- Already extracted and up to date (with the same key config)?
+  local is_extracted, result = self:is_extracted(package_path, extract_dir,
+                                                 call_opts)
   if is_extracted then
     return result
   end
@@ -132,6 +166,7 @@ function _M:extract(package_path, extract_dir)
 
   local final_path = extract_dir .. "/" .. package_name
   local tmp_path = extract_dir .. "/.tmp-" .. package_name
+  local inner_zip_path = nil -- set when an encrypted package was decrypted
 
   -- Clean stale temporary directory from a previous failed extraction
   if fs.dir_exists(tmp_path) then
@@ -145,6 +180,9 @@ function _M:extract(package_path, extract_dir)
 
   local function fail(message)
     self:remove_tree(tmp_path)
+    if inner_zip_path and fs.file_exists(inner_zip_path) then
+      fs.remove(inner_zip_path)
+    end
     return nil, message
   end
 
@@ -158,6 +196,38 @@ function _M:extract(package_path, extract_dir)
   if not files then
     zip.close(zfile)
     return fail("Failed to list files in package: " .. (lerr or "unknown"))
+  end
+
+  -- Encrypted layout (section 6b): decrypt to an inner zip, then proceed
+  -- with the inner archive exactly like a plaintext package.
+  if decrypter.is_encrypted_listing(files) then
+    local encryption = (call_opts and call_opts.encryption)
+                       or self.encryption
+    inner_zip_path = extract_dir .. "/.tmp-" .. package_name .. ".inner.cap"
+
+    local decrypted, derr = decrypter.decrypt_inner_zip(zfile, zip, fs,
+      self.crypto or default_crypto(), {
+        private_key_path = encryption and encryption.private_key_path,
+        inner_zip_path = inner_zip_path
+      })
+    zip.close(zfile)
+
+    if not decrypted then
+      return fail(derr or "Failed to decrypt package")
+    end
+
+    zfile, zerr = zip.open(inner_zip_path)
+    if not zfile then
+      return fail("Failed to open decrypted package as zip: " ..
+                  (zerr or "unknown"))
+    end
+
+    files, lerr = zip.list_files(zfile)
+    if not files then
+      zip.close(zfile)
+      return fail("Failed to list files in decrypted package: " ..
+                  (lerr or "unknown"))
+    end
   end
 
   -- Extract every file, guarding against zip-slip path traversal
@@ -196,6 +266,11 @@ function _M:extract(package_path, extract_dir)
 
   zip.close(zfile)
 
+  if inner_zip_path and fs.file_exists(inner_zip_path) then
+    fs.remove(inner_zip_path)
+    inner_zip_path = nil
+  end
+
   -- metadata.json must exist and parse
   local metadata_content = fs.read_file(tmp_path .. "/metadata.json")
   if not metadata_content then
@@ -229,6 +304,11 @@ function _M:extract(package_path, extract_dir)
     self:remove_tree(tmp_path)
     return nil, "Failed to finalize extraction: " .. (rnerr or "unknown")
   end
+
+  -- Record which decryption key produced this extraction (sidecar lives
+  -- outside the package tree so integrity coverage is unaffected)
+  fs.write_file(keyid_path(extract_dir, package_name),
+                self:effective_key_path(call_opts), "w")
 
   return final_path
 end

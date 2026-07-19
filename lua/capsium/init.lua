@@ -56,6 +56,7 @@ function _M.init(options)
     fs_adapter = nginx_adapter.fs_adapter,
     zip_adapter = nginx_adapter.zip_adapter,
     hash_fn = hash_adapter.sha256_file_hex,
+    encryption = config_loader.normalize_encryption(config.encryption),
     logger = function(level, msg)
       local ngx_level = level == "warn" and ngx.WARN or ngx.ERR
       log(ngx_level, msg)
@@ -179,7 +180,9 @@ function _M.handle_request()
   end
 
   -- Resolve and load the package (lazy extraction + integrity verification)
-  local package, err, status = reactor:get_package(mount.name)
+  local package, err, status = reactor:get_package(mount.name, {
+    encryption = mount.encryption
+  })
   if not package then
     apply_cors_headers(mount)
     if status == "not_found" then

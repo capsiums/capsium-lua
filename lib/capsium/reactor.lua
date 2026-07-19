@@ -25,6 +25,8 @@ local function noop_logger() end
 --   opts.hash_fn (optional): sha256 file hash function
 --   opts.crypto (optional): crypto module (signature verification, package
 --     decryption); defaults to capsium.crypto
+--   opts.encryption (optional): { private_key_path = ... } — default key
+--     config for encrypted packages (section 6b)
 --   opts.logger (optional): function(level, message)
 function _M.new(opts)
   opts = opts or {}
@@ -46,7 +48,8 @@ function _M.new(opts)
     fs_adapter = opts.fs_adapter,
     zip_adapter = opts.zip_adapter,
     hash_fn = opts.hash_fn,
-    crypto = opts.crypto
+    crypto = opts.crypto,
+    encryption = opts.encryption
   })
 
   local self = {
@@ -55,6 +58,7 @@ function _M.new(opts)
     fs_adapter = opts.fs_adapter,
     hash_fn = opts.hash_fn,
     crypto = opts.crypto,
+    encryption = opts.encryption,
     extractor = extractor,
     logger = opts.logger or noop_logger,
     _memo = {} -- name -> { mtime = n, package = Package } or { mtime = n, error = msg }
@@ -94,8 +98,14 @@ end
 
 -- Get a loaded package by name (without .cap extension).
 -- Lazily extracts (with integrity verification) and loads the package.
+--   call_opts.encryption (optional): per-package key config override
+--     ({ private_key_path = ... }) for encrypted packages
 -- Returns Package, or nil, err, status ("not_found" | "error").
-function _M:get_package(name)
+--
+-- Memoization is keyed by package name AND the effective key path, so a
+-- package never gets served from an extraction produced under a different
+-- decryption key.
+function _M:get_package(name, call_opts)
   local fs = self.fs_adapter
   local package_path = self.package_dir .. "/" .. name .. ".cap"
 
@@ -103,8 +113,11 @@ function _M:get_package(name)
     return nil, "Package not found: " .. name, "not_found"
   end
 
+  local key_path = self.extractor:effective_key_path(call_opts)
+  local memo_key = name .. "\n" .. key_path
+
   local mtime = fs.get_mtime(package_path)
-  local memo = self._memo[name]
+  local memo = self._memo[memo_key]
   if memo and memo.mtime == mtime then
     if memo.package then
       return memo.package
@@ -112,11 +125,12 @@ function _M:get_package(name)
     return nil, memo.error, "error"
   end
 
-  -- Extract (atomic, integrity-verifying)
+  -- Extract (atomic, integrity-verifying; decrypts encrypted packages)
   local extract_path, err = self.extractor:extract(package_path,
-                                                   self.extract_dir)
+                                                   self.extract_dir,
+                                                   call_opts)
   if not extract_path then
-    self._memo[name] = { mtime = mtime, error = err }
+    self._memo[memo_key] = { mtime = mtime, error = err }
     self.logger("error", "Failed to extract " .. name .. ": " ..
                 tostring(err))
     return nil, err, "error"
@@ -131,12 +145,12 @@ function _M:get_package(name)
 
   local ok, lerr = package:load()
   if not ok then
-    self._memo[name] = { mtime = mtime, error = lerr }
+    self._memo[memo_key] = { mtime = mtime, error = lerr }
     self.logger("error", "Failed to load " .. name .. ": " .. tostring(lerr))
     return nil, lerr, "error"
   end
 
-  self._memo[name] = { mtime = mtime, package = package }
+  self._memo[memo_key] = { mtime = mtime, package = package }
   return package
 end
 

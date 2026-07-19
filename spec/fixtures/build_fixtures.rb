@@ -12,12 +12,20 @@
 #                                 (ARCHITECTURE.md section 6a)
 #   signed-tampered-1.0.0.cap     valid checksums but a signature that does
 #                                 NOT match (signature rejection vector)
+#   encrypted-sample-1.0.0.cap    encrypted layout (section 6b): metadata.json
+#                                 + signature.json envelope + package.enc
+#                                 (AES-256-GCM inner zip, RSA-OAEP-SHA256 DEK)
+#
+# Keys (test-only, regenerated each run) land in spec/fixtures/keys/:
+#   private.pem/public.pem              signing + encryption recipient
+#   other-private.pem/other-public.pem  unrelated pair (wrong-key tests)
 #
 # Uses Ruby's Digest::SHA256 and the system `zip` binary — no gem
 # dependencies. Run via `rake fixtures` or directly:
 #
 #   ruby spec/fixtures/build_fixtures.rb
 
+require 'base64'
 require 'digest'
 require 'fileutils'
 require 'json'
@@ -166,6 +174,62 @@ def build_legacy(name, src_dir)
   puts "built #{out}"
 end
 
+# Build an encrypted package (ARCHITECTURE.md section 6b) for the
+# recipient's RSA public key, mirroring the Ruby gem's Cipher:
+# the inner zip is the normal (checksummed) package; the outer zip holds
+# metadata.json (cleartext), signature.json (the envelope) and
+# package.enc (AES-256-GCM ciphertext of the inner zip). The DEK is
+# wrapped with RSA-OAEP-SHA256 (MGF1-SHA256).
+RSA_OPTIONS = {
+  'rsa_padding_mode' => 'oaep',
+  'rsa_oaep_md' => 'SHA256',
+  'rsa_mgf1_md' => 'SHA256'
+}.freeze
+
+def build_encrypted(name, public_key)
+  inner_staging = File.join(FIXTURES_DIR, 'tmp-build', "#{name}-inner")
+  outer_staging = File.join(FIXTURES_DIR, 'tmp-build', "#{name}-outer")
+  inner_cap = File.join(FIXTURES_DIR, 'tmp-build', "#{name}-inner.cap")
+  out = File.join(FIXTURES_DIR, "#{name}.cap")
+
+  # Inner package (with integrity checksums)
+  FileUtils.rm_rf(inner_staging)
+  FileUtils.mkdir_p(inner_staging)
+  stage(File.join(SRC_DIR, name), inner_staging)
+  write_security_json(inner_staging)
+  zip_dir(inner_staging, inner_cap)
+
+  # Envelope + ciphertext
+  cipher = OpenSSL::Cipher.new('aes-256-gcm')
+  cipher.encrypt
+  dek = cipher.random_key
+  iv = cipher.random_iv
+  ciphertext = cipher.update(File.binread(inner_cap)) + cipher.final
+  envelope = {
+    encryption: {
+      algorithm: 'AES-256-GCM',
+      keyManagement: 'RSA-OAEP-SHA256',
+      encryptedDek: Base64.strict_encode64(public_key.encrypt(dek, RSA_OPTIONS)),
+      iv: Base64.strict_encode64(iv),
+      authTag: Base64.strict_encode64(cipher.auth_tag)
+    }
+  }
+
+  # Outer package
+  FileUtils.rm_rf(outer_staging)
+  FileUtils.mkdir_p(outer_staging)
+  FileUtils.cp(File.join(inner_staging, 'metadata.json'), outer_staging)
+  File.write(File.join(outer_staging, 'signature.json'),
+             JSON.pretty_generate(envelope))
+  File.binwrite(File.join(outer_staging, 'package.enc'), ciphertext)
+  zip_dir(outer_staging, out)
+
+  FileUtils.rm_rf(inner_staging)
+  FileUtils.rm_rf(outer_staging)
+  FileUtils.rm_f(inner_cap)
+  puts "built #{out}"
+end
+
 build('canonical-sample-1.0.0', with_security: true)
 # The tampered fixture shares the canonical source tree; about.html is
 # modified after checksums are computed so verification must reject it.
@@ -188,3 +252,11 @@ build('signed-sample-1.0.0', sign_with: signing_key)
 # rejected by the signature gate.
 build('signed-tampered-1.0.0', src_name: 'signed-sample-1.0.0',
                                sign_with: signing_key, bad_signature: true)
+
+# A second, unrelated key pair: mounting the encrypted package with this
+# key must fail the DEK unwrap.
+other_key = OpenSSL::PKey::RSA.generate(2048)
+File.write(File.join(KEYS_DIR, 'other-private.pem'), other_key.to_pem)
+File.write(File.join(KEYS_DIR, 'other-public.pem'), other_key.public_key.to_pem)
+
+build_encrypted('encrypted-sample-1.0.0', signing_key.public_key)

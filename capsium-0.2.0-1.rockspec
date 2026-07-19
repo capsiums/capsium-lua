@@ -47,6 +47,7 @@ build = {
       -- Package layer
       ["capsium.package.package"] = "lib/capsium/package/package.lua",
       ["capsium.package.extractor"] = "lib/capsium/package/extractor.lua",
+      ["capsium.package.decrypter"] = "lib/capsium/package/decrypter.lua",
       ["capsium.package.router"] = "lib/capsium/package/router.lua",
       ["capsium.package.security"] = "lib/capsium/package/security.lua",
 

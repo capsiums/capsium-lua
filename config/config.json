@@ -4,6 +4,9 @@
   "cache_enabled": true,
   "cache_ttl": 3600,
   "log_level": "info",
+  "encryption": {
+    "privateKeyPath": "/var/lib/capsium/packages/keys/private.pem"
+  },
   "mounts": [
     {
       "package": "mn-samples-iso-0.1.0.cap",
@@ -43,6 +46,19 @@
     {
       "package": "signed-tampered-1.0.0.cap",
       "path": "/signed-broken"
+    },
+    {
+      "package": "encrypted-sample-1.0.0.cap",
+      "path": "/encrypted"
+    },
+    {
+      "package": "encrypted-sample-1.0.0.cap",
+      "path": "/encrypted-wrong-key",
+      "options": {
+        "encryption": {
+          "privateKeyPath": "/var/lib/capsium/packages/keys/other-private.pem"
+        }
+      }
     }
   ]
 }

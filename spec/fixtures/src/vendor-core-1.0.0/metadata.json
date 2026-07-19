@@ -1,0 +1,9 @@
+{
+  "name": "vendor-core",
+  "version": "1.0.0",
+  "description": "Vendor core library package (composite store fixture)",
+  "guid": "capsium://fixtures/vendor-core",
+  "uuid": "523e4567-e89b-12d3-a456-426614174004",
+  "author": "Ribose",
+  "license": "MIT"
+}

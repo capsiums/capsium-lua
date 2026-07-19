@@ -9,10 +9,11 @@
 
 local Package = require "capsium.package.package"
 local Extractor = require "capsium.package.extractor"
+local Store = require "capsium.package.store"
 local utils = require "capsium.utils"
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 local _M_mt = { __index = _M }
 
@@ -27,6 +28,8 @@ local function noop_logger() end
 --     decryption); defaults to capsium.crypto
 --   opts.encryption (optional): { private_key_path = ... } — default key
 --     config for encrypted packages (section 6b)
+--   opts.store_dir (optional): package store directory for composite
+--     package dependency resolution (section 4a)
 --   opts.logger (optional): function(level, message)
 function _M.new(opts)
   opts = opts or {}
@@ -56,12 +59,16 @@ function _M.new(opts)
     package_dir = opts.package_dir,
     extract_dir = opts.extract_dir,
     fs_adapter = opts.fs_adapter,
+    zip_adapter = opts.zip_adapter,
     hash_fn = opts.hash_fn,
     crypto = opts.crypto,
     encryption = opts.encryption,
+    store_dir = opts.store_dir,
     extractor = extractor,
     logger = opts.logger or noop_logger,
-    _memo = {} -- name -> { mtime = n, package = Package } or { mtime = n, error = msg }
+    _store = nil,      -- Store handle, created on first use
+    _store_memo = {},  -- store file path -> { mtime, package|error }
+    _memo = {} -- name\nkey -> { mtime = n, package = Package } or { mtime = n, error = msg }
   }
 
   return setmetatable(self, _M_mt)
@@ -150,7 +157,122 @@ function _M:get_package(name, call_opts)
     return nil, lerr, "error"
   end
 
+  -- Composite packages (section 4a): resolve and mount dependencies
+  local aok, aerr = self:attach_dependencies(package)
+  if not aok then
+    self._memo[memo_key] = { mtime = mtime, error = aerr }
+    self.logger("error", "Failed to resolve dependencies of " .. name ..
+                ": " .. tostring(aerr))
+    return nil, aerr, "error"
+  end
+
   self._memo[memo_key] = { mtime = mtime, package = package }
+  return package
+end
+
+-- ---------------------------------------------------------------------------
+-- Composite packages (ARCHITECTURE.md section 4a)
+-- ---------------------------------------------------------------------------
+
+-- Lazily create the package store handle.
+local function store_for(self)
+  if not self._store then
+    self._store = Store.new({
+      store_dir = self.store_dir,
+      fs_adapter = self.fs_adapter,
+      zip_adapter = self.zip_adapter
+    })
+  end
+  return self._store
+end
+
+-- Resolve and mount a package's dependencies (no-op when the package
+-- declares none). `visited` carries the ancestor guid chain for cycle
+-- detection. Returns true | nil, err.
+function _M:attach_dependencies(package, visited)
+  local metadata = package:get_metadata()
+  local dependencies = metadata and metadata.dependencies
+  if type(dependencies) ~= "table" or not next(dependencies) then
+    return true
+  end
+
+  if not self.store_dir then
+    return nil, "Package declares dependencies but no package store is " ..
+                "configured (store_dir / CAPSIUM_STORE)"
+  end
+
+  local plan, perr = store_for(self):plan(dependencies)
+  if not plan then
+    return nil, perr
+  end
+
+  -- The package itself joins the ancestor chain for its dependencies
+  local chain = {}
+  for guid in pairs(visited or {}) do
+    chain[guid] = true
+  end
+  if type(metadata.guid) == "string" then
+    chain[metadata.guid] = true
+  end
+
+  local attached = {}
+  for guid, candidate in pairs(plan) do
+    if chain[guid] then
+      return nil, "Dependency cycle detected: " .. guid
+    end
+
+    local dependency, derr = self:load_store_package(candidate, chain)
+    if not dependency then
+      return nil, "Failed to load dependency " .. guid .. ": " ..
+                  tostring(derr)
+    end
+    attached[guid] = dependency
+  end
+
+  package:set_dependencies(attached)
+  return true
+end
+
+-- Extract and load a dependency from the store (memoized by file+mtime),
+-- recursing into its own dependencies.
+function _M:load_store_package(candidate, visited)
+  local fs = self.fs_adapter
+  local mtime = fs.get_mtime(candidate.file)
+
+  local memo = self._store_memo[candidate.file]
+  if memo and memo.mtime == mtime then
+    if memo.package then
+      return memo.package
+    end
+    return nil, memo.error
+  end
+
+  local extract_path, err = self.extractor:extract(candidate.file,
+                                                   self.extract_dir)
+  if not extract_path then
+    self._store_memo[candidate.file] = { mtime = mtime, error = err }
+    return nil, err
+  end
+
+  local package = Package.new(extract_path, {
+    fs_adapter = fs,
+    hash_fn = self.hash_fn,
+    crypto = self.crypto
+  })
+
+  local ok, lerr = package:load()
+  if not ok then
+    self._store_memo[candidate.file] = { mtime = mtime, error = lerr }
+    return nil, lerr
+  end
+
+  local aok, aerr = self:attach_dependencies(package, visited)
+  if not aok then
+    self._store_memo[candidate.file] = { mtime = mtime, error = aerr }
+    return nil, aerr
+  end
+
+  self._store_memo[candidate.file] = { mtime = mtime, package = package }
   return package
 end
 

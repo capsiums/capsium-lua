@@ -198,12 +198,20 @@ function _M.normalize_routes(raw)
   for _, entry in ipairs(raw.routes) do
     if type(entry) == "table" and type(entry.path) == "string" then
       if type(entry.resource) == "string" then
-        -- Canonical static route; resource is package-relative
+        -- Canonical static route; resource is package-relative (or a
+        -- capsium://<guid>/<path> dependency reference, section 4a)
         table.insert(routes, {
-          path = entry.path,
+          -- Route inheritance: remap is the effective served path
+          path = type(entry.remap) == "string" and entry.remap
+                 or entry.path,
+          original_path = entry.remap ~= nil and entry.path or nil,
           resource = entry.resource,
           headers = entry.headers,
-          visibility = entry.visibility
+          visibility = entry.visibility,
+          remap = entry.remap,
+          responseRewrite = entry.responseRewrite,
+          responseHeaders = entry.responseHeaders,
+          requestHeaders = entry.requestHeaders
         })
       elseif type(entry.dataset) == "string" then
         -- Dataset route

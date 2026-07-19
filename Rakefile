@@ -95,6 +95,7 @@ namespace :docker do
           -v #{Dir.pwd}/nginx/conf.d:/etc/nginx/conf.d \
           -v #{Dir.pwd}/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf \
           -v #{Dir.pwd}/spec/fixtures:/var/lib/capsium/packages \
+          -v #{Dir.pwd}/spec/fixtures/store:/var/lib/capsium/store \
           -v #{Dir.pwd}/spec/static:/var/lib/capsium/static \
           -e CAPSIUM_CONFIG_PATH=/etc/capsium/config.json \
           #{IMAGE_NAME}

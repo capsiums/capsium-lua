@@ -1,0 +1,12 @@
+{
+  "name": "composite-sample",
+  "version": "1.0.0",
+  "description": "Composite Capsium sample package (section 4a)",
+  "guid": "capsium://fixtures/composite-sample",
+  "uuid": "623e4567-e89b-12d3-a456-426614174005",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {
+    "capsium://fixtures/vendor-core": ">=1.0.0"
+  }
+}

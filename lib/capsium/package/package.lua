@@ -14,6 +14,7 @@ local cjson = require "cjson"
 local mime = require "capsium.mime"
 local router = require "capsium.package.router"
 local security = require "capsium.package.security"
+local composite = require "capsium.package.composite"
 local csv = require "capsium.csv"
 
 local _M = {
@@ -49,7 +50,9 @@ function _M.new(extract_path, opts)
     index = nil,      -- index resource path
     storage = nil,    -- normalized dataSets map
     layers = nil,     -- normalized storage.layers array (bottom -> top)
-    _tombstones = nil, -- set of tombstoned package-relative paths
+    _tombstones = nil, -- per-layer tombstone sets { [layer_path] = set }
+    _dependencies = {}, -- guid -> Package (section 4a)
+    _dependency_guids = {}, -- dependency guids, longest stripped first
     _loaded = false
   }
 
@@ -228,49 +231,42 @@ function _M:load_layers()
   return nil
 end
 
--- Package-relative name of the tombstone list in the topmost writable layer
+-- Package-relative name of the tombstone list inside a layer
 local TOMBSTONES_FILE = ".capsium-tombstones"
 
--- Load the tombstone set from the topmost writable layer: a JSON array of
--- package-relative paths deleted in the merged view (section 5a).
--- Returns a set (path -> true) or nil.
+-- Load the tombstone sets of every layer (JSON arrays of merged-view
+-- paths). Deletions are RECORDED by writers in the topmost writable layer
+-- (section 5a), but readers honor tombstone lists in any layer: a path
+-- tombstoned at or above the first serving layer resolves as deleted.
+-- Returns { [layer_path] = set } or nil.
 function _M:load_tombstones()
   local layers = self.layers
   if not layers then
     return nil
   end
 
-  local top_writable
-  for i = #layers, 1, -1 do
-    if layers[i].writable then
-      top_writable = layers[i]
-      break
-    end
-  end
-  if not top_writable then
-    return nil
-  end
-
   local fs = self.fs_adapter
-  local path = self.extract_path .. "/" .. top_writable.path .. "/" ..
-               TOMBSTONES_FILE
-  if not fs.file_exists(path) then
-    return nil
-  end
+  local by_layer = nil
 
-  local raw = read_json(fs, path)
-  if type(raw) ~= "table" then
-    return nil
-  end
-
-  local set = {}
-  for _, deleted in ipairs(raw) do
-    if type(deleted) == "string" then
-      set[deleted] = true
+  for _, layer in ipairs(layers) do
+    local path = self.extract_path .. "/" .. layer.path .. "/" ..
+                 TOMBSTONES_FILE
+    if fs.file_exists(path) then
+      local raw = read_json(fs, path)
+      if type(raw) == "table" then
+        local set = {}
+        for _, deleted in ipairs(raw) do
+          if type(deleted) == "string" then
+            set[deleted] = true
+          end
+        end
+        by_layer = by_layer or {}
+        by_layer[layer.path] = set
+      end
     end
   end
 
-  return set
+  return by_layer
 end
 
 -- Load and normalize routes.json; auto-generate when absent.
@@ -314,15 +310,14 @@ function _M:load_routes()
 end
 
 -- Resolve a package-relative resource path through the storage layers
--- (section 5a): tombstoned paths are deleted in the merged view; layers
--- are searched top-to-bottom and the first hit wins. Without a layers
--- config the package root is the single implicit layer.
+-- (section 5a): layers are searched top-to-bottom and the first hit wins;
+-- a path tombstoned at or above the first serving layer resolves as
+-- deleted (a file sharing a layer with its tombstone still wins).
+-- Without a layers config the package root is the single implicit layer.
+--   viewpoint: "self" (default) sees all layers; "dependent" (composite
+--     packages, section 4a) sees only exported layers
 -- Returns absolute path | nil, "tombstoned" | "not_found".
-function _M:find_resource(resource)
-  if self._tombstones and self._tombstones[resource] then
-    return nil, "tombstoned"
-  end
-
+function _M:find_resource(resource, viewpoint)
   local fs = self.fs_adapter
 
   if not self.layers then
@@ -333,11 +328,23 @@ function _M:find_resource(resource)
     return nil, "not_found"
   end
 
+  local tombstoned = false
   for i = #self.layers, 1, -1 do
-    local path = self.extract_path .. "/" .. self.layers[i].path .. "/" ..
-                 resource
-    if fs.file_exists(path) then
-      return path
+    local layer = self.layers[i]
+    if viewpoint ~= "dependent" or layer.visibility == "exported" then
+      local set = self._tombstones and self._tombstones[layer.path]
+      if set and set[resource] then
+        tombstoned = true
+      end
+
+      local path = self.extract_path .. "/" .. layer.path .. "/" ..
+                   resource
+      if fs.file_exists(path) then
+        return path
+      end
+      if tombstoned then
+        return nil, "tombstoned"
+      end
     end
   end
 
@@ -347,6 +354,8 @@ end
 -- Resolve a request path to a servable target.
 -- Returns one of:
 --   { kind = "static", path = <abs path>, mime = <type>, headers = <t|nil> }
+--   { kind = "static", body = <string>, mime = <type>, headers = <t|nil> }
+--     (responseRewrite.body replaced the file content, section 4a)
 --   { kind = "dataset", dataset = <name> }
 --   { kind = "handler" }   (dynamic route; reactors respond 501)
 --   nil, err               when no route matches
@@ -375,6 +384,11 @@ function _M:resolve(request_path)
     return nil, "Route has no target: " .. tostring(request_path)
   end
 
+  -- Dependency resource reference (section 4a): capsium://<guid>/<path>
+  if composite.is_dependency_ref(route.resource) then
+    return self:resolve_dependency_ref(route)
+  end
+
   local file_path, fstatus = self:find_resource(route.resource)
   if not file_path then
     if fstatus == "tombstoned" then
@@ -383,13 +397,82 @@ function _M:resolve(request_path)
     return nil, "Target file does not exist: " .. route.resource
   end
 
-  return {
+  return composite.apply_response_processing({
     kind = "static",
     path = file_path,
     mime = router.resource_mime(self.manifest, route.resource)
            or "application/octet-stream",
     headers = route.headers
-  }
+  }, route)
+end
+
+-- Resolve a capsium://<guid>/<path> route against the mounted
+-- dependencies (section 4a). Only exported resources are visible;
+-- referencing a dependency's private resource is an error.
+function _M:resolve_dependency_ref(route)
+  local ref = composite.parse_ref(route.resource, self._dependency_guids)
+  local dependency = ref and self._dependencies[ref.guid]
+
+  if not ref or not dependency then
+    return nil, "Dependency not installed for reference: " ..
+                route.resource
+  end
+
+  -- The dependency's layers apply from the dependent viewpoint (private
+  -- layers excluded, section 5a)
+  local file_path, fstatus = dependency:find_resource(ref.path, "dependent")
+
+  if not file_path then
+    -- Layered resolution first (mirrors @capsium/core): a resource that
+    -- IS present may still be private
+    local manifest = dependency:get_manifest()
+    local info = manifest and manifest[ref.path]
+    if fstatus ~= "tombstoned" and info
+       and info.visibility == "private" then
+      return nil, "Dependency resource is private: " .. route.resource
+    end
+    if fstatus == "tombstoned" then
+      return nil, "Dependency resource was deleted (tombstoned): " ..
+                  route.resource
+    end
+    return nil, "Dependency resource missing: " .. route.resource
+  end
+
+  local manifest = dependency:get_manifest()
+  local info = manifest and manifest[ref.path]
+  if info and info.visibility == "private" then
+    return nil, "Dependency resource is private: " .. route.resource
+  end
+
+  return composite.apply_response_processing({
+    kind = "static",
+    path = file_path,
+    mime = router.resource_mime(manifest, ref.path)
+           or "application/octet-stream",
+    headers = route.headers
+  }, route)
+end
+
+-- Mount resolved dependency packages (guid -> Package), making their
+-- exported resources visible to capsium:// references (section 4a).
+function _M:set_dependencies(dependencies)
+  self._dependencies = dependencies or {}
+
+  -- Precompute the guid list (longest stripped guid first for
+  -- deterministic longest-prefix matching)
+  local guids = {}
+  for guid in pairs(self._dependencies) do
+    table.insert(guids, guid)
+  end
+  table.sort(guids, function(a, b)
+    local sa = (a:gsub("^[^:]+://", ""))
+    local sb = (b:gsub("^[^:]+://", ""))
+    if #sa ~= #sb then
+      return #sa > #sb
+    end
+    return a < b
+  end)
+  self._dependency_guids = guids
 end
 
 -- Load a dataset by name. Supports JSON and CSV sources

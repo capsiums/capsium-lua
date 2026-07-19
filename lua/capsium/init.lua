@@ -53,6 +53,7 @@ function _M.init(options)
   reactor = Reactor.new({
     package_dir = config.package_dir,
     extract_dir = config.extract_dir,
+    store_dir = config.store_dir,
     fs_adapter = nginx_adapter.fs_adapter,
     zip_adapter = nginx_adapter.zip_adapter,
     hash_fn = hash_adapter.sha256_file_hex,
@@ -228,13 +229,22 @@ function _M.handle_request()
   -- Static resource
   ngx.header.content_type = target.mime
 
-  -- Cache-Control: route headers < mount Cache-Control default
-  local cache_control = mount.static_cache_control
-  if target.headers and target.headers["Cache-Control"] then
-    cache_control = target.headers["Cache-Control"]
+  -- Route-level headers (incl. section-4a responseHeaders /
+  -- responseRewrite) override the mount Cache-Control default
+  if target.headers then
+    for name, value in pairs(target.headers) do
+      ngx.header[name] = value
+    end
   end
-  if not (mount.headers and mount.headers["Cache-Control"]) then
-    ngx.header["Cache-Control"] = cache_control
+  if not (target.headers and target.headers["Cache-Control"])
+     and not (mount.headers and mount.headers["Cache-Control"]) then
+    ngx.header["Cache-Control"] = mount.static_cache_control
+  end
+
+  -- responseRewrite.body replaces the file content (section 4a)
+  if target.body then
+    ngx.print(target.body)
+    return ngx.OK
   end
 
   local content, ferr = nginx_adapter.fs_adapter.read_file(target.path, "rb")

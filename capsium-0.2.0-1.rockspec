@@ -40,6 +40,7 @@ build = {
       ["capsium.mime"] = "lib/capsium/mime.lua",
       ["capsium.csv"] = "lib/capsium/csv.lua",
       ["capsium.crypto"] = "lib/capsium/crypto.lua",
+      ["capsium.semver"] = "lib/capsium/semver.lua",
 
       -- Reactor core
       ["capsium.reactor"] = "lib/capsium/reactor.lua",
@@ -48,6 +49,8 @@ build = {
       ["capsium.package.package"] = "lib/capsium/package/package.lua",
       ["capsium.package.extractor"] = "lib/capsium/package/extractor.lua",
       ["capsium.package.decrypter"] = "lib/capsium/package/decrypter.lua",
+      ["capsium.package.composite"] = "lib/capsium/package/composite.lua",
+      ["capsium.package.store"] = "lib/capsium/package/store.lua",
       ["capsium.package.router"] = "lib/capsium/package/router.lua",
       ["capsium.package.security"] = "lib/capsium/package/security.lua",
 

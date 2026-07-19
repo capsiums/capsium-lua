@@ -40,12 +40,14 @@ FIXTURES_DIR = __dir__
 SRC_DIR = File.join(FIXTURES_DIR, 'src')
 
 # Recursively collect files under dir as relative POSIX paths, skipping
-# dotfiles (.DS_Store and friends). The .capsium-tombstones dotfile is a
-# package artifact (section 5a) and is kept.
+# dotfiles (.DS_Store and friends). Package-artifact dotfiles (section 5a's
+# .capsium-tombstones, section 4b's .htpasswd) are kept.
+DOTFILE_ALLOWLIST = %w[.capsium-tombstones .htpasswd].freeze
+
 def collect_files(dir, prefix = '')
   files = []
   Dir.entries(dir).sort.each do |entry|
-    next if entry.start_with?('.') && entry != '.capsium-tombstones'
+    next if entry.start_with?('.') && !DOTFILE_ALLOWLIST.include?(entry)
 
     path = File.join(dir, entry)
     rel = prefix.empty? ? entry : "#{prefix}/#{entry}"
@@ -277,3 +279,6 @@ STORE_DIR = File.join(FIXTURES_DIR, 'store')
 build('vendor-core-1.0.0', out_dir: STORE_DIR)
 build('vendor-core-1.1.0', out_dir: STORE_DIR)
 build('composite-sample-1.0.0')
+
+build('auth-sample-1.0.0')
+build('oauth-sample-1.0.0')

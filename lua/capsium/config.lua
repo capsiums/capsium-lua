@@ -184,6 +184,40 @@ function _M.normalize_encryption(raw)
   return { private_key_path = path }
 end
 
+-- Normalize the deploy-time authentication config (section 4b: secrets
+-- come from the deployment, never from the package):
+--   { "sessionSecret": "...", "sessionTtl": 3600,
+--     "oauth2": { "clientSecret": "..." } }
+-- Environment overrides: CAPSIUM_SESSION_SECRET, OAUTH_CLIENT_SECRET.
+function _M.normalize_authentication(raw)
+  raw = type(raw) == "table" and raw or {}
+
+  local session_secret = os.getenv("CAPSIUM_SESSION_SECRET")
+  if not session_secret or session_secret == "" then
+    session_secret = raw.sessionSecret or raw.session_secret
+  end
+  if session_secret == "" then
+    session_secret = nil
+  end
+
+  local client_secret = os.getenv("OAUTH_CLIENT_SECRET")
+  if not client_secret or client_secret == "" then
+    client_secret = type(raw.oauth2) == "table"
+                    and raw.oauth2.clientSecret or nil
+  end
+  if client_secret == "" then
+    client_secret = nil
+  end
+
+  local ttl = tonumber(raw.sessionTtl or raw.session_ttl) or 3600
+
+  return {
+    session_secret = session_secret,
+    session_ttl = ttl,
+    oauth2_client_secret = client_secret
+  }
+end
+
 -- Match a path prefix: uri == path or uri starts with path .. "/"
 local function path_matches(mount_path, uri)
   if uri == mount_path then

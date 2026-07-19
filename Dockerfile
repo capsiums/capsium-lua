@@ -36,8 +36,12 @@ COPY lua/capsium /etc/nginx/lua/capsium
 COPY nginx/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY nginx/conf.d /etc/nginx/conf.d
 
+# Entrypoint: renders the cosocket DNS resolver, then starts nginx
+COPY docker/entrypoint.sh /usr/local/bin/capsium-entrypoint.sh
+RUN chmod +x /usr/local/bin/capsium-entrypoint.sh
+
 # Expose port
 EXPOSE 80
 
 # Start Nginx
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["capsium-entrypoint.sh"]

@@ -1,0 +1,12 @@
+{
+  "storage": {
+    "dataSets": {
+      "secure": {
+        "source": "data/secure.json"
+      },
+      "admin-data": {
+        "source": "data/admin.json"
+      }
+    }
+  }
+}

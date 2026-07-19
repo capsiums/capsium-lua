@@ -50,6 +50,7 @@ function _M.new(extract_path, opts)
     index = nil,      -- index resource path
     storage = nil,    -- normalized dataSets map
     layers = nil,     -- normalized storage.layers array (bottom -> top)
+    authentication = nil, -- normalized authentication.json (section 4b)
     _tombstones = nil, -- per-layer tombstone sets { [layer_path] = set }
     _dependencies = {}, -- guid -> Package (section 4a)
     _dependency_guids = {}, -- dependency guids, longest stripped first
@@ -124,6 +125,9 @@ function _M:load()
   -- storage layers (optional, section 5a) + tombstones
   self.layers = self:load_layers()
   self._tombstones = self:load_tombstones()
+
+  -- authentication.json (optional, section 4b)
+  self.authentication = self:load_authentication()
 
   -- routes.json (auto-generated from manifest + storage when absent)
   local routes, rerr = self:load_routes()
@@ -231,10 +235,62 @@ function _M:load_layers()
   return nil
 end
 
--- Package-relative name of the tombstone list inside a layer
-local TOMBSTONES_FILE = ".capsium-tombstones"
+-- Load and normalize authentication.json (ARCHITECTURE.md section 4b).
+-- Returns { basicAuth = {...}?, oauth2 = {...}? } or nil when no
+-- authentication is configured or everything is disabled.
+function _M:load_authentication()
+  local fs = self.fs_adapter
+  local path = self.extract_path .. "/authentication.json"
 
--- Load the tombstone sets of every layer (JSON arrays of merged-view
+  if not fs.file_exists(path) then
+    return nil
+  end
+
+  local raw = read_json(fs, path)
+  local authn = raw and raw.authentication
+  if type(authn) ~= "table" then
+    return nil
+  end
+
+  local normalized = {}
+
+  local basic = authn.basicAuth
+  if type(basic) == "table" and basic.enabled == true
+     and type(basic.passwdFile) == "string" then
+    normalized.basicAuth = {
+      enabled = true,
+      passwd_file = basic.passwdFile,
+      realm = type(basic.realm) == "string" and basic.realm or "capsium"
+    }
+  end
+
+  local oauth2 = authn.oauth2 or authn.oauth
+  if type(oauth2) == "table" and oauth2.enabled == true
+     and type(oauth2.authorizationUrl) == "string"
+     and type(oauth2.tokenUrl) == "string"
+     and type(oauth2.clientId) == "string" then
+    normalized.oauth2 = {
+      enabled = true,
+      provider = oauth2.provider,
+      client_id = oauth2.clientId,
+      authorization_url = oauth2.authorizationUrl,
+      token_url = oauth2.tokenUrl,
+      userinfo_url = oauth2.userinfoUrl,
+      redirect_path = type(oauth2.redirectPath) == "string"
+                      and oauth2.redirectPath or "/auth/callback",
+      scopes = type(oauth2.scopes) == "table" and oauth2.scopes or nil
+    }
+  end
+
+  if not normalized.basicAuth and not normalized.oauth2 then
+    return nil
+  end
+
+  return normalized
+end
+
+-- Package-relative name of the tombstone list inside a layer
+local TOMBSTONES_FILE = ".capsium-tombstones"-- Load the tombstone sets of every layer (JSON arrays of merged-view
 -- paths). Deletions are RECORDED by writers in the topmost writable layer
 -- (section 5a), but readers honor tombstone lists in any layer: a path
 -- tombstoned at or above the first serving layer resolves as deleted.
@@ -373,7 +429,11 @@ function _M:resolve(request_path)
   end
 
   if route.dataset then
-    return { kind = "dataset", dataset = route.dataset }
+    return {
+      kind = "dataset",
+      dataset = route.dataset,
+      accessControl = route.accessControl
+    }
   end
 
   if route.handler then
@@ -616,6 +676,17 @@ function _M:get_layers()
     end
   end
   return self.layers
+end
+
+-- authentication.json (normalized) or nil (section 4b)
+function _M:get_authentication()
+  if not self._loaded then
+    local ok, err = self:load()
+    if not ok then
+      return nil, err
+    end
+  end
+  return self.authentication
 end
 
 return _M

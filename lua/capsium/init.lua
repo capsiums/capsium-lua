@@ -9,10 +9,11 @@ local cjson = require "cjson"
 local config_loader = require "capsium.config"
 local nginx_adapter = require "capsium.adapters.nginx"
 local hash_adapter = require "capsium.adapters.hash"
+local auth_gate = require "capsium.auth_gate"
 local Reactor = require "capsium.reactor"
 
 local _M = {
-  _VERSION = "0.2.0"
+  _VERSION = "0.3.0"
 }
 
 local INTROSPECT_PREFIX = "/api/v1/introspect"
@@ -69,6 +70,8 @@ function _M.init(options)
   end
 
   _M.config = config
+  _M.deploy_authentication =
+    config_loader.normalize_authentication(config.authentication)
 
   log(ngx.INFO, "initialized (config: ", config.config_path or "defaults",
       ", mounts: ", #config.mounts, ")")
@@ -194,6 +197,19 @@ function _M.handle_request()
                          tostring(err))
   end
 
+  -- Authentication gate (section 4b): challenges, OAuth2 redirects and
+  -- callbacks are answered by the gate itself; introspection stays open
+  -- (it never reaches this handler)
+  local authn = package:get_authentication()
+  local principal = nil
+  if authn then
+    principal = auth_gate.gate(package, mount, subpath,
+                               _M.deploy_authentication)
+    if not principal then
+      return -- the gate already answered the request
+    end
+  end
+
   -- Resolve the route
   local target, rerr = package:resolve(subpath)
   if not target then
@@ -217,6 +233,13 @@ function _M.handle_request()
   apply_cors_headers(mount)
 
   if target.kind == "dataset" then
+    -- Route-level accessControl, enforced after authentication (4b).
+    -- Without package authentication methods an authenticationRequired
+    -- route always answers 401 (there is no way to authenticate).
+    if not auth_gate.enforce_dataset_access(target, principal, authn) then
+      return
+    end
+
     local data, derr = package:get_dataset(target.dataset)
     if not data then
       return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR, tostring(derr))

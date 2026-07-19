@@ -1,0 +1,10 @@
+{
+  "name": "oauth-sample",
+  "version": "1.0.0",
+  "description": "OAuth2 Capsium sample package (section 4b)",
+  "guid": "https://github.com/capsiums/capsium-lua/oauth-sample",
+  "uuid": "823e4567-e89b-12d3-a456-426614174007",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

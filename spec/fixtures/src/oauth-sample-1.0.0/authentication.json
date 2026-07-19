@@ -1,0 +1,14 @@
+{
+  "authentication": {
+    "oauth2": {
+      "enabled": true,
+      "provider": "mock",
+      "clientId": "capsium-test",
+      "authorizationUrl": "http://host.docker.internal:9292/oauth/authorize",
+      "tokenUrl": "http://host.docker.internal:9292/oauth/token",
+      "userinfoUrl": "http://host.docker.internal:9292/oauth/userinfo",
+      "redirectPath": "/auth/callback",
+      "scopes": ["openid", "profile"]
+    }
+  }
+}

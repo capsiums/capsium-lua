@@ -1,0 +1,10 @@
+{
+  "name": "encrypted-sample",
+  "version": "1.0.0",
+  "description": "Encrypted Capsium sample package (section 6b)",
+  "guid": "https://github.com/capsiums/capsium-lua/encrypted-sample",
+  "uuid": "323e4567-e89b-12d3-a456-426614174002",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

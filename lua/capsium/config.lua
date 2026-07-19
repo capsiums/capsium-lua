@@ -78,6 +78,7 @@ local function build_mount_view(raw)
   view.headers = view.options.headers or view.headers or {}
   view.cors = view.options.cors
   view.cache_ttl = view.options.cache_ttl
+  view.encryption = _M.normalize_encryption(view.options.encryption)
 
   -- Precompute the static Cache-Control header value for this mount
   if view.headers["Cache-Control"] then
@@ -158,6 +159,22 @@ function _M.load(options)
 
   config.mounts = mounts
   return config
+end
+
+-- Normalize a JSON encryption config block
+--   { "privateKeyPath": "/path/to/private.pem" }
+-- to the core shape { private_key_path = ... }. Returns nil when unusable.
+function _M.normalize_encryption(raw)
+  if type(raw) ~= "table" then
+    return nil
+  end
+
+  local path = raw.privateKeyPath or raw.private_key_path
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+
+  return { private_key_path = path }
 end
 
 -- Match a path prefix: uri == path or uri starts with path .. "/"

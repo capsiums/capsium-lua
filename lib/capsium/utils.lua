@@ -159,6 +159,77 @@ function _M.write_json_file(path, data)
   return true
 end
 
+-- ---------------------------------------------------------------------------
+-- Base64 (pure Lua; ngx.base64 only exists inside nginx workers)
+-- ---------------------------------------------------------------------------
+
+local B64_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local b64_dec = {} -- byte value of alphabet char -> sextet
+local b64_enc = {} -- sextet -> alphabet char
+for i = 1, #B64_ALPHABET do
+  b64_dec[B64_ALPHABET:byte(i)] = i - 1
+  b64_enc[i - 1] = B64_ALPHABET:sub(i, i)
+end
+
+-- Decode base64 (standard alphabet, "=" padding tolerated, whitespace
+-- ignored). Grouped arithmetic only — no running accumulator, so binary
+-- payloads of any size decode exactly.
+-- Returns decoded string | nil, err.
+function _M.base64_decode(data)
+  if type(data) ~= "string" then
+    return nil, "invalid base64"
+  end
+
+  data = data:gsub("%s", "")
+  if data:sub(-2) == "==" or data:sub(-1) == "=" then
+    data = data:gsub("=+$", "")
+  end
+  if #data % 4 == 1 then
+    return nil, "invalid base64 length"
+  end
+
+  local out = {}
+  for i = 1, #data, 4 do
+    local b1, b2, b3, b4 = data:byte(i, i + 3)
+    local s1, s2 = b64_dec[b1], b64_dec[b2]
+    if not s1 or not s2 then
+      return nil, "invalid base64"
+    end
+    local s3 = b3 and b64_dec[b3] or 0
+    local s4 = b4 and b64_dec[b4] or 0
+    if (b3 and not s3) or (b4 and not s4) then
+      return nil, "invalid base64"
+    end
+
+    local n = ((s1 * 64 + s2) * 64 + s3) * 64 + s4
+    out[#out + 1] = string.char(math.floor(n / 65536) % 256)
+    if b3 then
+      out[#out + 1] = string.char(math.floor(n / 256) % 256)
+    end
+    if b4 then
+      out[#out + 1] = string.char(n % 256)
+    end
+  end
+
+  return table.concat(out)
+end
+
+-- Encode base64 (standard alphabet with "=" padding).
+function _M.base64_encode(data)
+  local out = {}
+  for i = 1, #data, 3 do
+    local a, b, c = data:byte(i, i + 2)
+    local n = a * 65536 + (b or 0) * 256 + (c or 0)
+    out[#out + 1] = b64_enc[math.floor(n / 262144)]
+    out[#out + 1] = b64_enc[math.floor(n / 4096) % 64]
+    out[#out + 1] = b and b64_enc[math.floor(n / 64) % 64] or "="
+    out[#out + 1] = c and b64_enc[n % 64] or "="
+  end
+  return table.concat(out)
+end
+
 -- Check if file exists
 function _M.file_exists(path)
   local attr = lfs.attributes(path)

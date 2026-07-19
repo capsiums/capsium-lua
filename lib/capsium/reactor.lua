@@ -23,6 +23,8 @@ local function noop_logger() end
 --   opts.extract_dir (required): directory packages are extracted to
 --   opts.fs_adapter (required), opts.zip_adapter (required)
 --   opts.hash_fn (optional): sha256 file hash function
+--   opts.crypto (optional): crypto module (signature verification, package
+--     decryption); defaults to capsium.crypto
 --   opts.logger (optional): function(level, message)
 function _M.new(opts)
   opts = opts or {}
@@ -43,7 +45,8 @@ function _M.new(opts)
   local extractor = Extractor.new({
     fs_adapter = opts.fs_adapter,
     zip_adapter = opts.zip_adapter,
-    hash_fn = opts.hash_fn
+    hash_fn = opts.hash_fn,
+    crypto = opts.crypto
   })
 
   local self = {
@@ -51,6 +54,7 @@ function _M.new(opts)
     extract_dir = opts.extract_dir,
     fs_adapter = opts.fs_adapter,
     hash_fn = opts.hash_fn,
+    crypto = opts.crypto,
     extractor = extractor,
     logger = opts.logger or noop_logger,
     _memo = {} -- name -> { mtime = n, package = Package } or { mtime = n, error = msg }
@@ -121,7 +125,8 @@ function _M:get_package(name)
   -- Load the package model
   local package = Package.new(extract_path, {
     fs_adapter = fs,
-    hash_fn = self.hash_fn
+    hash_fn = self.hash_fn,
+    crypto = self.crypto
   })
 
   local ok, lerr = package:load()

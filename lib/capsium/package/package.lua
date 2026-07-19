@@ -26,6 +26,8 @@ local _M_mt = { __index = _M }
 --   opts.fs_adapter (required): file system adapter
 --   opts.hash_fn (optional): function(file_path) -> sha256 hex; used for
 --     integrity verification (defaults to the hash adapter)
+--   opts.crypto (optional): crypto module for signature verification
+--     (defaults to capsium.crypto)
 function _M.new(extract_path, opts)
   if not extract_path then
     return nil, "extract_path is required"
@@ -40,6 +42,7 @@ function _M.new(extract_path, opts)
     extract_path = extract_path,
     fs_adapter = opts.fs_adapter,
     hash_fn = opts.hash_fn,
+    crypto = opts.crypto,
     metadata = nil,
     manifest = nil,   -- normalized resources map
     routes = nil,     -- normalized routes array
@@ -328,7 +331,8 @@ function _M:get_dataset(name)
          " (supported: json, csv)"
 end
 
--- Verify package integrity against security.json (ARCHITECTURE.md section 6).
+-- Verify package integrity against security.json (ARCHITECTURE.md sections
+-- 6/6a): SHA-256 checksums plus the declared digital signature.
 -- Returns valid (boolean), reason (nil when valid).
 function _M:verify_integrity()
   local hash_fn = self.hash_fn
@@ -336,8 +340,13 @@ function _M:verify_integrity()
     hash_fn = require("capsium.adapters.hash").sha256_file_hex
   end
 
+  local crypto = self.crypto
+  if not crypto then
+    crypto = require "capsium.crypto"
+  end
+
   local ok, reason = security.verify(self.extract_path, self.fs_adapter,
-                                     hash_fn)
+                                     hash_fn, crypto)
   if not ok then
     return false, reason
   end

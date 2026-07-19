@@ -27,3 +27,8 @@ files["test/**"] = {
     "assert", "spy", "mock", "stub", "finally"
   }
 }
+
+-- Generated test vectors (PEM keys live on single long lines)
+files["test/crypto_vectors.lua"] = {
+  ignore = {"631"}
+}

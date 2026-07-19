@@ -1,0 +1,10 @@
+{
+  "name": "signed-sample",
+  "version": "1.0.0",
+  "description": "Digitally signed Capsium sample package (section 6a)",
+  "guid": "https://github.com/capsiums/capsium-lua/signed-sample",
+  "uuid": "223e4567-e89b-12d3-a456-426614174001",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

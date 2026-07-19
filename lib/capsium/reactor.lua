@@ -107,6 +107,8 @@ end
 -- Lazily extracts (with integrity verification) and loads the package.
 --   call_opts.encryption (optional): per-package key config override
 --     ({ private_key_path = ... }) for encrypted packages
+--   call_opts.source_file (optional): absolute .cap path overriding the
+--     default package_dir lookup (registry-installed mounts)
 -- Returns Package, or nil, err, status ("not_found" | "error").
 --
 -- Memoization is keyed by package name AND the effective key path, so a
@@ -115,6 +117,9 @@ end
 function _M:get_package(name, call_opts)
   local fs = self.fs_adapter
   local package_path = self.package_dir .. "/" .. name .. ".cap"
+  if call_opts and call_opts.source_file then
+    package_path = call_opts.source_file
+  end
 
   if not fs.file_exists(package_path) then
     return nil, "Package not found: " .. name, "not_found"

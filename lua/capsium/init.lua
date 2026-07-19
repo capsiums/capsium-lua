@@ -11,6 +11,7 @@ local nginx_adapter = require "capsium.adapters.nginx"
 local hash_adapter = require "capsium.adapters.hash"
 local auth_gate = require "capsium.auth_gate"
 local Reactor = require "capsium.reactor"
+local Registry = require "capsium.registry"
 
 local _M = {
   _VERSION = "0.3.0"
@@ -22,9 +23,98 @@ local INTROSPECT_PREFIX = "/api/v1/introspect"
 local config
 local reactor
 local cache -- ngx.shared.capsium_cache or nil
+local registries = {} -- registry ref -> Registry instance | nil, err memo
 
 local function log(level, ...)
   ngx.log(level, "Capsium: ", ...)
+end
+
+-- ---------------------------------------------------------------------------
+-- Static registry pull (mount sources may be capsium://<guid>)
+-- ---------------------------------------------------------------------------
+
+-- resty.http-backed GET for remote registries; resty.http only loads
+-- inside nginx workers (cosockets are unavailable in init context), which
+-- is also why registry resolution is lazy (first request through the
+-- mount).
+local function http_get(url)
+  local ok, http = pcall(require, "resty.http")
+  if not ok then
+    return nil, "resty.http unavailable"
+  end
+
+  local client = http.new()
+  client:set_timeout(15000)
+  local res, err = client:request_uri(url, {
+    method = "GET",
+    ssl_verify = true
+  })
+  if not res then
+    return nil, err
+  end
+  return res.status, res.headers, res.body
+end
+
+-- Registry instances are memoized per reference (per worker).
+local function registry_for(ref)
+  local memo = registries[ref]
+  if memo then
+    return memo.registry, memo.err
+  end
+
+  local registry, err = Registry.new({
+    ref = ref,
+    fs_adapter = nginx_adapter.fs_adapter,
+    http_get = http_get
+  })
+  registries[ref] = { registry = registry, err = err }
+  return registry, err
+end
+
+-- Resolve a capsium:// mount: install the newest satisfying version from
+-- the registry into the package store (sha256-verified against the
+-- index; an up-to-date store file is reused) and switch the mount view
+-- to the installed file. Failures are memoized on the mount and answered
+-- with a typed 5xx.
+local function resolve_registry_mount(mount)
+  if mount.source_file or mount.resolve_error then
+    return
+  end
+
+  local ref = mount.registry or config.registry
+  if type(ref) ~= "string" or ref == "" then
+    mount.resolve_error = "mount " .. mount.path .. " references " ..
+      mount.source_guid .. " but no registry is configured (mount " ..
+      "\"registry\" / top-level \"registry\" / CAPSIUM_REGISTRY)"
+    mount.resolve_error_type = "not_configured"
+    log(ngx.ERR, mount.resolve_error)
+    return
+  end
+
+  local registry, rerr = registry_for(ref)
+  if not registry then
+    mount.resolve_error = "mount " .. mount.path .. ": " .. tostring(rerr)
+    mount.resolve_error_type = "invalid"
+    log(ngx.ERR, mount.resolve_error)
+    return
+  end
+
+  local store_dir = mount.store or config.store_dir
+  local path, err, etype = registry:install(mount.source_guid,
+                                            mount.version_constraint or "*",
+                                            store_dir)
+  if not path then
+    mount.resolve_error = "mount " .. mount.path .. " (" ..
+      mount.source_guid .. "): " .. tostring(err)
+    mount.resolve_error_type = etype
+    log(ngx.ERR, mount.resolve_error)
+    return
+  end
+
+  mount.source_file = path
+  mount.name = path:match("([^/]+)%.cap$")
+  log(ngx.INFO, "resolved ", mount.source_guid, " (",
+      mount.version_constraint or "*", ") -> ", path)
 end
 
 -- Initialize the module. Called from init_by_lua_block.
@@ -67,6 +157,26 @@ function _M.init(options)
 
   if config.cache_enabled then
     cache = ngx.shared.capsium_cache
+  end
+
+  -- Registry-backed mounts (capsium:// sources): surface configuration
+  -- problems at startup. The resolve/download itself is lazy (first
+  -- request through the mount) because cosocket HTTP is unavailable in
+  -- init context.
+  for _, mount in ipairs(config.mounts) do
+    if mount.source_guid then
+      local ref = mount.registry or config.registry
+      if type(ref) ~= "string" or ref == "" then
+        log(ngx.ERR, "mount ", mount.path, " references ",
+            mount.source_guid, " but no registry is configured (mount ",
+            "\"registry\" / top-level \"registry\" / CAPSIUM_REGISTRY)")
+      else
+        local _, rerr = registry_for(ref)
+        if rerr then
+          log(ngx.ERR, "mount ", mount.path, ": ", rerr)
+        end
+      end
+    end
   end
 
   _M.config = config
@@ -183,9 +293,24 @@ function _M.handle_request()
                          "Method not allowed")
   end
 
+  -- Registry-backed mounts (capsium:// sources) resolve lazily: a
+  -- sha256-verified install into the package store, then the normal
+  -- mount flow serves the installed .cap
+  if mount.source_guid and not mount.source_file then
+    resolve_registry_mount(mount)
+    if not mount.source_file then
+      apply_cors_headers(mount)
+      return respond_json(ngx.HTTP_INTERNAL_SERVER_ERROR, {
+        error = mount.resolve_error,
+        type = mount.resolve_error_type
+      })
+    end
+  end
+
   -- Resolve and load the package (lazy extraction + integrity verification)
   local package, err, status = reactor:get_package(mount.name, {
-    encryption = mount.encryption
+    encryption = mount.encryption,
+    source_file = mount.source_file
   })
   if not package then
     apply_cors_headers(mount)

@@ -47,6 +47,7 @@ build = {
       ["capsium.csv"] = "lib/capsium/csv.lua",
       ["capsium.crypto"] = "lib/capsium/crypto.lua",
       ["capsium.semver"] = "lib/capsium/semver.lua",
+      ["capsium.registry"] = "lib/capsium/registry.lua",
 
       -- Reactor core
       ["capsium.reactor"] = "lib/capsium/reactor.lua",

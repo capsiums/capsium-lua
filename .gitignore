@@ -42,6 +42,7 @@ spec/fixtures/auth-sample-1.0.0.cap
 spec/fixtures/oauth-sample-1.0.0.cap
 spec/fixtures/store/*.cap
 spec/fixtures/keys/
+spec/fixtures/registry/
 
 # Extracted packages cache
 extracted/

@@ -1,0 +1,9 @@
+{
+  "name": "registry-tampered",
+  "version": "1.0.0",
+  "description": "Registry package whose index sha256 does not match (tamper fixture)",
+  "guid": "capsium://fixtures/registry-tampered",
+  "uuid": "723e4567-e89b-12d3-a456-426614174002",
+  "author": "Ribose",
+  "license": "MIT"
+}

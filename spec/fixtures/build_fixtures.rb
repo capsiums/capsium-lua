@@ -20,6 +20,12 @@
 #   composite-sample-1.0.0.cap    depends on capsium://fixtures/vendor-core
 #                                 (section 4a); the store (fixtures/store/)
 #                                 offers vendor-core 1.0.0 + 1.1.0
+#   registry/                     static registry fixture: index.json + .cap
+#                                 files for registry-app 1.0.0/1.1.0 (mount
+#                                 sources capsium://fixtures/registry-app)
+#                                 and registry-tampered 1.0.0 (index sha256
+#                                 deliberately wrong: install must be
+#                                 rejected with a checksum mismatch)
 #
 # Keys (test-only, regenerated each run) land in spec/fixtures/keys/:
 #   private.pem/public.pem              signing + encryption recipient
@@ -282,3 +288,44 @@ build('composite-sample-1.0.0')
 
 build('auth-sample-1.0.0')
 build('oauth-sample-1.0.0')
+
+# Static registry fixture (registry pull): a directory of .cap files plus
+# an index.json (guid -> name + versions -> file/sha256/size). The
+# registry-tampered entry deliberately records a wrong sha256 so the
+# reactor must reject the install with a checksum mismatch.
+REGISTRY_DIR = File.join(FIXTURES_DIR, 'registry')
+
+def registry_entry(cap_path, guid, name, version, sha256: nil)
+  {
+    guid: guid, name: name, version: version,
+    file: File.basename(cap_path),
+    sha256: sha256 || Digest::SHA256.file(cap_path).hexdigest,
+    size: File.size(cap_path)
+  }
+end
+
+FileUtils.mkdir_p(REGISTRY_DIR)
+build('registry-app-1.0.0', out_dir: REGISTRY_DIR)
+build('registry-app-1.1.0', out_dir: REGISTRY_DIR)
+build('registry-tampered-1.0.0', out_dir: REGISTRY_DIR)
+
+registry_index = { packages: {} }
+[
+  registry_entry(File.join(REGISTRY_DIR, 'registry-app-1.0.0.cap'),
+                 'capsium://fixtures/registry-app', 'registry-app', '1.0.0'),
+  registry_entry(File.join(REGISTRY_DIR, 'registry-app-1.1.0.cap'),
+                 'capsium://fixtures/registry-app', 'registry-app', '1.1.0'),
+  registry_entry(File.join(REGISTRY_DIR, 'registry-tampered-1.0.0.cap'),
+                 'capsium://fixtures/registry-tampered',
+                 'registry-tampered', '1.0.0', sha256: '0' * 64)
+].each do |entry|
+  listing = registry_index[:packages][entry[:guid]] ||= {
+    'name' => entry[:name], 'versions' => {}
+  }
+  listing['versions'][entry[:version]] = {
+    'file' => entry[:file], 'sha256' => entry[:sha256], 'size' => entry[:size]
+  }
+end
+File.write(File.join(REGISTRY_DIR, 'index.json'),
+           JSON.pretty_generate(registry_index))
+puts "built #{File.join(REGISTRY_DIR, 'index.json')}"

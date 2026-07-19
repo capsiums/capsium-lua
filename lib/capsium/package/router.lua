@@ -123,6 +123,52 @@ function _M.normalize_storage(raw)
 end
 
 -- ---------------------------------------------------------------------------
+-- Storage layers (ARCHITECTURE.md section 5a)
+-- ---------------------------------------------------------------------------
+
+-- Normalize layered storage config to an array (bottom -> top) of
+--   { path = "base", writable = false, visibility = "exported" }
+-- Canonical source: storage.json's storage.layers. The manifest.json
+-- top-level "layers" form (05x-storage) is accepted on read as well.
+-- Entries with unsafe paths (absolute, "..") or no string path are
+-- skipped. Returns nil when no usable layers are configured.
+function _M.normalize_layers(raw)
+  local layers
+
+  if type(raw) == "table" then
+    if type(raw.storage) == "table" and type(raw.storage.layers) == "table" then
+      layers = raw.storage.layers
+    elseif type(raw.layers) == "table" then
+      layers = raw.layers
+    end
+  end
+
+  if not layers then
+    return nil
+  end
+
+  local normalized = {}
+  for _, layer in ipairs(layers) do
+    if type(layer) == "table" and type(layer.path) == "string"
+       and layer.path ~= ""
+       and layer.path:sub(1, 1) ~= "/"
+       and not layer.path:find("%.%.") then
+      table.insert(normalized, {
+        path = layer.path,
+        writable = layer.writable == true,
+        visibility = layer.visibility == "private" and "private" or "exported"
+      })
+    end
+  end
+
+  if #normalized == 0 then
+    return nil
+  end
+
+  return normalized
+end
+
+-- ---------------------------------------------------------------------------
 -- Routes
 -- ---------------------------------------------------------------------------
 

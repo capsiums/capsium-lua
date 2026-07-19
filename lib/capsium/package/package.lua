@@ -48,6 +48,8 @@ function _M.new(extract_path, opts)
     routes = nil,     -- normalized routes array
     index = nil,      -- index resource path
     storage = nil,    -- normalized dataSets map
+    layers = nil,     -- normalized storage.layers array (bottom -> top)
+    _tombstones = nil, -- set of tombstoned package-relative paths
     _loaded = false
   }
 
@@ -115,6 +117,10 @@ function _M:load()
 
   -- storage.json (optional)
   self.storage = self:load_storage()
+
+  -- storage layers (optional, section 5a) + tombstones
+  self.layers = self:load_layers()
+  self._tombstones = self:load_tombstones()
 
   -- routes.json (auto-generated from manifest + storage when absent)
   local routes, rerr = self:load_routes()
@@ -194,6 +200,79 @@ function _M:load_storage()
   return router.normalize_storage(raw)
 end
 
+-- Load storage layers (ARCHITECTURE.md section 5a). Canonical source:
+-- storage.json's storage.layers; the manifest.json top-level "layers"
+-- form (05x-storage) is accepted on read as well.
+-- Returns the normalized array (bottom -> top) or nil.
+function _M:load_layers()
+  local fs = self.fs_adapter
+
+  local storage_path = self.extract_path .. "/storage.json"
+  if fs.file_exists(storage_path) then
+    local raw = read_json(fs, storage_path)
+    local layers = raw and router.normalize_layers(raw)
+    if layers then
+      return layers
+    end
+  end
+
+  local manifest_path = self.extract_path .. "/manifest.json"
+  if fs.file_exists(manifest_path) then
+    local raw = read_json(fs, manifest_path)
+    local layers = raw and router.normalize_layers(raw)
+    if layers then
+      return layers
+    end
+  end
+
+  return nil
+end
+
+-- Package-relative name of the tombstone list in the topmost writable layer
+local TOMBSTONES_FILE = ".capsium-tombstones"
+
+-- Load the tombstone set from the topmost writable layer: a JSON array of
+-- package-relative paths deleted in the merged view (section 5a).
+-- Returns a set (path -> true) or nil.
+function _M:load_tombstones()
+  local layers = self.layers
+  if not layers then
+    return nil
+  end
+
+  local top_writable
+  for i = #layers, 1, -1 do
+    if layers[i].writable then
+      top_writable = layers[i]
+      break
+    end
+  end
+  if not top_writable then
+    return nil
+  end
+
+  local fs = self.fs_adapter
+  local path = self.extract_path .. "/" .. top_writable.path .. "/" ..
+               TOMBSTONES_FILE
+  if not fs.file_exists(path) then
+    return nil
+  end
+
+  local raw = read_json(fs, path)
+  if type(raw) ~= "table" then
+    return nil
+  end
+
+  local set = {}
+  for _, deleted in ipairs(raw) do
+    if type(deleted) == "string" then
+      set[deleted] = true
+    end
+  end
+
+  return set
+end
+
 -- Load and normalize routes.json; auto-generate when absent.
 function _M:load_routes()
   local fs = self.fs_adapter
@@ -234,6 +313,37 @@ function _M:load_routes()
   return router.generate_routes(self.manifest, self.storage, index)
 end
 
+-- Resolve a package-relative resource path through the storage layers
+-- (section 5a): tombstoned paths are deleted in the merged view; layers
+-- are searched top-to-bottom and the first hit wins. Without a layers
+-- config the package root is the single implicit layer.
+-- Returns absolute path | nil, "tombstoned" | "not_found".
+function _M:find_resource(resource)
+  if self._tombstones and self._tombstones[resource] then
+    return nil, "tombstoned"
+  end
+
+  local fs = self.fs_adapter
+
+  if not self.layers then
+    local path = self.extract_path .. "/" .. resource
+    if fs.file_exists(path) then
+      return path
+    end
+    return nil, "not_found"
+  end
+
+  for i = #self.layers, 1, -1 do
+    local path = self.extract_path .. "/" .. self.layers[i].path .. "/" ..
+                 resource
+    if fs.file_exists(path) then
+      return path
+    end
+  end
+
+  return nil, "not_found"
+end
+
 -- Resolve a request path to a servable target.
 -- Returns one of:
 --   { kind = "static", path = <abs path>, mime = <type>, headers = <t|nil> }
@@ -265,8 +375,11 @@ function _M:resolve(request_path)
     return nil, "Route has no target: " .. tostring(request_path)
   end
 
-  local file_path = self.extract_path .. "/" .. route.resource
-  if not self.fs_adapter.file_exists(file_path) then
+  local file_path, fstatus = self:find_resource(route.resource)
+  if not file_path then
+    if fstatus == "tombstoned" then
+      return nil, "Resource was deleted (tombstoned): " .. route.resource
+    end
     return nil, "Target file does not exist: " .. route.resource
   end
 
@@ -409,6 +522,17 @@ function _M:get_storage()
     end
   end
   return self.storage
+end
+
+-- Storage layers (bottom -> top) or nil when not layered
+function _M:get_layers()
+  if not self._loaded then
+    local ok, err = self:load()
+    if not ok then
+      return nil, err
+    end
+  end
+  return self.layers
 end
 
 return _M

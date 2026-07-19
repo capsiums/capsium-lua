@@ -59,6 +59,10 @@
           "privateKeyPath": "/var/lib/capsium/packages/keys/other-private.pem"
         }
       }
+    },
+    {
+      "package": "layered-sample-1.0.0.cap",
+      "path": "/layered"
     }
   ]
 }

@@ -1,0 +1,10 @@
+{
+  "name": "layered-sample",
+  "version": "1.0.0",
+  "description": "Layered-storage Capsium sample package (section 5a)",
+  "guid": "https://github.com/capsiums/capsium-lua/layered-sample",
+  "uuid": "423e4567-e89b-12d3-a456-426614174003",
+  "author": "Ribose",
+  "license": "MIT",
+  "dependencies": {}
+}

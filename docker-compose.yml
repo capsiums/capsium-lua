@@ -9,6 +9,10 @@ services:
       # Mount Capsium packages directory (run `rake fixtures` first to
       # build the generated .cap fixtures)
       - ./spec/fixtures:/var/lib/capsium/packages
+      # Package store (composite packages + registry installs)
+      - ./spec/fixtures/store:/var/lib/capsium/store
+      # Static registry fixture (capsium:// mount sources)
+      - ./spec/fixtures/registry:/var/lib/capsium/registry
       # Mount Lua modules for development
       - ./lib/capsium:/usr/local/openresty/luajit/share/lua/5.1/capsium
       - ./lua/capsium:/etc/nginx/lua/capsium

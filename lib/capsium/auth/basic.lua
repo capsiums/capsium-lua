@@ -9,7 +9,7 @@ local utils = require "capsium.utils"
 local htpasswd = require "capsium.auth.htpasswd"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- Check an Authorization header value against htpasswd content.

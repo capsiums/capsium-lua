@@ -8,7 +8,7 @@
 -- any roles requirement fails closed (403); documented in README.
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- Evaluate a route's accessControl against a principal.

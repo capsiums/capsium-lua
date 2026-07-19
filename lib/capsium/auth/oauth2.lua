@@ -12,7 +12,7 @@ local utils = require "capsium.utils"
 local session = require "capsium.auth.session"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 -- ---------------------------------------------------------------------------

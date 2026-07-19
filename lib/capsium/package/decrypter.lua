@@ -23,7 +23,7 @@ local cjson = require "cjson"
 local utils = require "capsium.utils"
 
 local _M = {
-  _VERSION = "0.3.0"
+  _VERSION = "0.4.0"
 }
 
 local ENCRYPTED_FILE = "package.enc"

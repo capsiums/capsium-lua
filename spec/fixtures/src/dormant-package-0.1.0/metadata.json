@@ -1,0 +1,5 @@
+{
+  "name": "dormant-package",
+  "version": "0.1.0",
+  "description": "Minimal package used for cold-start introspection tests"
+}

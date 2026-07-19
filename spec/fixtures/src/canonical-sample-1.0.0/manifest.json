@@ -1,0 +1,8 @@
+{
+  "resources": {
+    "content/index.html": { "type": "text/html", "visibility": "exported" },
+    "content/about.html": { "type": "text/html", "visibility": "exported" },
+    "content/styles.css": { "type": "text/css", "visibility": "exported" },
+    "content/app.js": { "type": "text/javascript", "visibility": "exported" }
+  }
+}

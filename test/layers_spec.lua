@@ -168,14 +168,38 @@ describe("layered storage (ARCHITECTURE.md section 5a)", function()
       assert.is_truthy(target.path:find("base/content/"))
     end)
 
-    it("only reads tombstones from the topmost writable layer", function()
-      -- Tombstone list lives in the READ-ONLY base layer: must be ignored
+    it("lets a file sharing a layer with its tombstone win", function()
+      -- Tombstone list lives in the SAME (read-only base) layer as the
+      -- file: descending, the file is found in that layer before the
+      -- tombstone can mask lower layers
       local package = build_package({
         ["/pkg/base/.capsium-tombstones"] = '["content/deprecated.html"]'
       })
 
       local target = assert(package:resolve("/deprecated"))
       assert.is_truthy(target.path:find("base/content/deprecated%.html$"))
+    end)
+
+    it("honors tombstones in any layer, masking lower layers", function()
+      -- 3 layers; the tombstone in the MIDDLE layer masks the bottom one
+      local files = {
+        ["/pkg/middle/.capsium-tombstones"] =
+          '["content/deprecated.html"]',
+        ["/pkg/middle/content/index.html"] = "<h1>middle</h1>"
+      }
+      local package = build_package(files, {
+        { path = "base", writable = false, visibility = "exported" },
+        { path = "middle", writable = false, visibility = "exported" },
+        { path = "updates", writable = true, visibility = "private" }
+      })
+
+      local target, err = package:resolve("/deprecated")
+      assert.is_nil(target)
+      assert.is_truthy(tostring(err):find("tombstoned"))
+
+      -- and unrelated lower files still serve
+      local ok = assert(package:resolve("/base-only"))
+      assert.is_truthy(ok.path:find("base/content/"))
     end)
 
     it("ignores a malformed tombstone file", function()

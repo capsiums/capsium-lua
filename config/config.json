@@ -63,6 +63,10 @@
     {
       "package": "layered-sample-1.0.0.cap",
       "path": "/layered"
+    },
+    {
+      "package": "composite-sample-1.0.0.cap",
+      "path": "/composite"
     }
   ]
 }

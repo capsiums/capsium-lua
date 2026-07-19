@@ -27,6 +27,7 @@ local DEFAULT_CONFIG = {
   cache_ttl = 3600, -- seconds; TTL for the capsium_cache shared dict
   log_level = "info",
   packages_config_dir = "/etc/capsium/packages",
+  store_dir = "/var/lib/capsium/store", -- package store (composite packages)
   mounts = {}
 }
 
@@ -122,6 +123,12 @@ function _M.load(options)
 
   local config = utils.merge_tables(DEFAULT_CONFIG, raw)
   config.config_path = config_path
+
+  -- The package store dir is overridable via the environment
+  local env_store = os.getenv("CAPSIUM_STORE")
+  if env_store and env_store ~= "" then
+    config.store_dir = env_store
+  end
 
   -- Precompute mount views from the mounts array
   local mounts = {}

@@ -37,6 +37,8 @@ spec/fixtures/signed-sample-1.0.0.cap
 spec/fixtures/signed-tampered-1.0.0.cap
 spec/fixtures/encrypted-sample-1.0.0.cap
 spec/fixtures/layered-sample-1.0.0.cap
+spec/fixtures/composite-sample-1.0.0.cap
+spec/fixtures/store/*.cap
 spec/fixtures/keys/
 
 # Extracted packages cache

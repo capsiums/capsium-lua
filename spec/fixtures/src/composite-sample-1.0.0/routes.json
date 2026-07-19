@@ -1,0 +1,33 @@
+{
+  "index": "content/index.html",
+  "routes": [
+    { "path": "/", "resource": "content/index.html" },
+    { "path": "/index.html", "resource": "content/index.html" },
+    {
+      "path": "/vendor/app.js",
+      "resource": "capsium://fixtures/vendor-core/content/app.js"
+    },
+    {
+      "path": "/vendor/old-app.js",
+      "resource": "capsium://fixtures/vendor-core/content/app.js",
+      "remap": "/vendor/legacy-app.js"
+    },
+    {
+      "path": "/vendor/greeting",
+      "resource": "capsium://fixtures/vendor-core/content/greeting.txt",
+      "responseHeaders": { "X-From": "composite" }
+    },
+    {
+      "path": "/vendor/rewritten",
+      "resource": "capsium://fixtures/vendor-core/content/greeting.txt",
+      "responseRewrite": {
+        "body": "rewritten by composite",
+        "headers": { "X-Rewritten": "yes" }
+      }
+    },
+    {
+      "path": "/vendor/secret.txt",
+      "resource": "capsium://fixtures/vendor-core/content/secret.txt"
+    }
+  ]
+}

@@ -17,6 +17,9 @@
 #                                 (AES-256-GCM inner zip, RSA-OAEP-SHA256 DEK)
 #   layered-sample-1.0.0.cap      storage.layers base+updates (section 5a):
 #                                 top-wins override + .capsium-tombstones 404
+#   composite-sample-1.0.0.cap    depends on capsium://fixtures/vendor-core
+#                                 (section 4a); the store (fixtures/store/)
+#                                 offers vendor-core 1.0.0 + 1.1.0
 #
 # Keys (test-only, regenerated each run) land in spec/fixtures/keys/:
 #   private.pem/public.pem              signing + encryption recipient
@@ -138,13 +141,14 @@ def zip_dir(staging, out_path)
 end
 
 def build(name, src_name: nil, with_security: false, tamper: nil,
-          sign_with: nil, bad_signature: false)
+          sign_with: nil, bad_signature: false, out_dir: FIXTURES_DIR)
   src = File.join(SRC_DIR, src_name || name)
   staging = File.join(FIXTURES_DIR, 'tmp-build', name)
-  out = File.join(FIXTURES_DIR, "#{name}.cap")
+  out = File.join(out_dir, "#{name}.cap")
 
   FileUtils.rm_rf(staging)
   FileUtils.mkdir_p(staging)
+  FileUtils.mkdir_p(out_dir)
   stage(src, staging)
 
   if sign_with
@@ -265,3 +269,11 @@ File.write(File.join(KEYS_DIR, 'other-public.pem'), other_key.public_key.to_pem)
 build_encrypted('encrypted-sample-1.0.0', signing_key.public_key)
 
 build('layered-sample-1.0.0', with_security: true)
+
+# Composite packages (section 4a): the vendor library lives in the
+# package store (two versions; newest satisfying must win), the dependent
+# package mounts it.
+STORE_DIR = File.join(FIXTURES_DIR, 'store')
+build('vendor-core-1.0.0', out_dir: STORE_DIR)
+build('vendor-core-1.1.0', out_dir: STORE_DIR)
+build('composite-sample-1.0.0')

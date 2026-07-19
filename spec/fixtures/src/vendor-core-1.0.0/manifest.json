@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "content/app.js": { "type": "text/javascript", "visibility": "exported" },
+    "content/greeting.txt": { "type": "text/plain", "visibility": "exported" },
+    "content/secret.txt": { "type": "text/plain", "visibility": "private" }
+  }
+}

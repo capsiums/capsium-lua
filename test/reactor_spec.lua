@@ -162,14 +162,54 @@ describe("Capsium reactor core", function()
       for _, entry in ipairs(report.contentValidity) do
         by_name[entry.package] = entry
         assert.is_string(entry.lastChecked)
+        assert.is_false(entry.encrypted)
       end
 
-      assert.is_true(by_name["good-pkg-1.0.0"].valid)
-      assert.is_nil(by_name["good-pkg-1.0.0"].reason)
+      -- Loadable packages are keyed by their metadata name; failed
+      -- packages fall back to the .cap filename
+      local good = by_name["good-pkg"]
+      assert.is_true(good.valid)
+      assert.is_nil(good.reason)
+      assert.is_false(good.signed)
+      assert.is_nil(good.signatureValid)
 
-      assert.is_false(by_name["bad-pkg-1.0.0"].valid)
-      assert.is_truthy(by_name["bad-pkg-1.0.0"].reason:
-                       find("checksum mismatch"))
+      local bad = by_name["bad-pkg-1.0.0"]
+      assert.is_false(bad.valid)
+      assert.is_truthy(bad.reason:find("checksum mismatch"))
+      assert.is_nil(bad.signed)
+    end)
+
+    it("reports encrypted packages that cannot be decrypted", function()
+      local fs = MockFs.new({
+        ["/packages/enc-pkg-1.0.0.cap"] = "enc-blob"
+      })
+      local zip = MockZip.new({
+        ["/packages/enc-pkg-1.0.0.cap"] = {
+          files = {
+            { name = "metadata.json",
+              content = '{"name":"enc-pkg","version":"1.0.0"}' },
+            { name = "signature.json", content = "{}" },
+            { name = "package.enc", content = "ciphertext" }
+          }
+        }
+      })
+      local reactor = Reactor.new({
+        package_dir = "/packages",
+        extract_dir = "/extracted",
+        fs_adapter = fs,
+        zip_adapter = zip,
+        hash_fn = mock_hash_fn(fs)
+      })
+
+      local report = reactor:content_validity_report()
+      assert.equals(1, #report.contentValidity)
+
+      local entry = report.contentValidity[1]
+      assert.equals("enc-pkg-1.0.0", entry.package)
+      assert.is_false(entry.valid)
+      assert.is_truthy(entry.reason:find("no private key"))
+      assert.is_true(entry.encrypted)
+      assert.is_nil(entry.signed)
     end)
   end)
 end)

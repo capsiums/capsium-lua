@@ -428,7 +428,46 @@ local introspect_handlers = {
   ["/content-validity"] = function() return reactor:content_validity_report() end
 }
 
+-- Authentication guard for the monitoring API (section 4b): when the
+-- package mounted at the root path ("/") requires authentication, the
+-- introspection endpoints are guarded by the same gate — parity with the
+-- Ruby reactor, which authenticates every request before dispatching.
+-- Returns false when the gate already answered the request (401
+-- challenge, OAuth2 redirect).
+local function introspection_guard()
+  local root_mount
+  for _, mount in ipairs(config.mounts) do
+    if mount.path == "/" then
+      root_mount = mount
+      break
+    end
+  end
+  if not root_mount or not root_mount.name then
+    return true
+  end
+
+  local package = reactor:get_package(root_mount.name, {
+    encryption = root_mount.encryption,
+    source_file = root_mount.source_file
+  })
+  if not package then
+    return true -- load failures surface on the package's own routes
+  end
+
+  local authn = package:get_authentication()
+  if not authn then
+    return true
+  end
+
+  return auth_gate.gate(package, root_mount, ngx.var.uri,
+                        _M.deploy_authentication) ~= nil
+end
+
 function _M.handle_introspection()
+  if not introspection_guard() then
+    return -- the gate already answered the request
+  end
+
   if ngx.req.get_method() ~= "GET" then
     ngx.header["Allow"] = "GET"
     return respond_error(ngx.HTTP_NOT_ALLOWED,

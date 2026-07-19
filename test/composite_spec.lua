@@ -9,20 +9,31 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
   local cjson = require "cjson"
 
   describe("composite.is_dependency_ref / parse_ref", function()
-    it("detects capsium:// references", function()
+    it("detects dependency references (any guid URI)", function()
       assert.is_true(composite.is_dependency_ref(
         "capsium://example.com/core/content/app.js"))
+      assert.is_true(composite.is_dependency_ref(
+        "https://example.com/core/content/app.js"))
       assert.is_false(composite.is_dependency_ref("content/app.js"))
       assert.is_false(composite.is_dependency_ref(nil))
     end)
 
-    it("parses against dependency guids (scheme stripped)", function()
+    it("parses against dependency guids (literal guid prefix)", function()
       local ref = assert(composite.parse_ref(
         "capsium://example.com/core/content/app.js",
         { "capsium://example.com/core" }))
 
       assert.equals("capsium://example.com/core", ref.guid)
       assert.equals("content/app.js", ref.path)
+
+      -- https:// guids (the reference form used by the conformance kit)
+      local https_ref = assert(composite.parse_ref(
+        "https://conformance.capsiums.dev/core/content/public.txt",
+        { "https://conformance.capsiums.dev/core" }))
+
+      assert.equals("https://conformance.capsiums.dev/core",
+                    https_ref.guid)
+      assert.equals("content/public.txt", https_ref.path)
     end)
 
     it("prefers the longest matching guid prefix", function()
@@ -193,7 +204,11 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
               headers = { ["X-Rewritten"] = "yes" }
             } },
           { path = "/vendor/secret",
-            resource = VENDOR_GUID .. "/content/secret.txt" }
+            resource = VENDOR_GUID .. "/content/secret.txt" },
+          { path = "/fallthrough/greeting.txt",
+            resource = "content/greeting.txt" },
+          { path = "/fallthrough/secret.txt",
+            resource = "content/secret.txt" }
         }
       })
     end
@@ -207,6 +222,9 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
         { name = "manifest.json",
           content = cjson.encode({
             resources = {
+              ["content/index.html"] = {
+                type = "text/html", visibility = "exported"
+              },
               ["content/app.js"] = {
                 type = "text/javascript", visibility = "exported"
               },
@@ -218,6 +236,8 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
               }
             }
           }) },
+        { name = "content/index.html",
+          content = "<h1>vendor " .. version .. "</h1>" },
         { name = "content/app.js",
           content = "vendor core " .. version },
         { name = "content/greeting.txt", content = "hello from vendor" },
@@ -319,14 +339,44 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
       assert.is_truthy(tostring(err):find("private"))
     end)
 
+    it("falls through to dependency content after own layers miss", function()
+      local reactor = build_reactor()
+      local package = assert(reactor:get_package("composite-1.0.0"))
+
+      local target = assert(package:resolve("/fallthrough/greeting.txt"))
+      local fs = reactor.fs_adapter
+      assert.equals("hello from vendor", fs.read_file(target.path))
+    end)
+
+    it("does not expose a dependency's private resource via fallthrough",
+       function()
+      local reactor = build_reactor()
+      local package = assert(reactor:get_package("composite-1.0.0"))
+
+      local target = package:resolve("/fallthrough/secret.txt")
+      assert.is_nil(target)
+    end)
+
+    it("own content shadows dependency content on fallthrough", function()
+      local reactor = build_reactor()
+      local package = assert(reactor:get_package("composite-1.0.0"))
+
+      -- content/index.html exists in both; the own file wins
+      local target = assert(package:resolve("/"))
+      assert.is_truthy(target.path:find(
+        "composite%-1%.0%.0/content/index%.html$"))
+    end)
+
     it("rejects references with no installed dependency", function()
       local reactor = build_reactor({ [VENDOR_GUID] = ">=1.0.0" })
       local package = assert(reactor:get_package("composite-1.0.0"))
 
-      -- Rewrite the reference to an unknown guid
-      local routes = package:get_routes()
-      routes[#routes].resource = "capsium://unknown.org/x/content/secret.txt"
-      package.routes = routes
+      -- Rewrite the /vendor/secret reference to an unknown guid
+      for _, route in ipairs(package:get_routes()) do
+        if route.path == "/vendor/secret" then
+          route.resource = "capsium://unknown.org/x/content/secret.txt"
+        end
+      end
 
       local target, err = package:resolve("/vendor/secret")
       assert.is_nil(target)
@@ -395,8 +445,8 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
               }
             }
           }),
-          ["/dep/base/content/visible.txt"] = "visible",
-          ["/dep/updates/content/hidden.txt"] = "hidden"
+          ["/dep/base/visible.txt"] = "visible",
+          ["/dep/updates/hidden.txt"] = "hidden"
         })
       })
       assert(dep:load())
@@ -414,7 +464,7 @@ describe("composite packages (ARCHITECTURE.md section 4a)", function()
         resource = "capsium://fixtures/dep/content/visible.txt",
         headers = nil
       }))
-      assert.equals("/dep/base/content/visible.txt", visible.path)
+      assert.equals("/dep/base/visible.txt", visible.path)
 
       local hidden, err = dependent:resolve_dependency_ref({
         resource = "capsium://fixtures/dep/content/hidden.txt"

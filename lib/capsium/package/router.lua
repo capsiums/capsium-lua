@@ -7,8 +7,8 @@
 --   manifest: canonical {"resources": {path: {type, visibility?}}}
 --             legacy   {"content": [{file, mime}, ...]} or {"content": {name: mime}}
 --   routes:   canonical {"index": path?, "routes": [{path, resource|dataset|handler...}]}
---             legacy   {"routes": [{path, target: {file}}]} (array)
---             legacy   {"routes": {path: {target: {file}}}} (object)
+--             legacy   {"routes": [{path, target: {file|dataset}}]} (array)
+--             legacy   {"routes": {path: {target: {file|dataset}}}} (object)
 --   storage:  canonical {"storage": {"dataSets": {name: {source, ...}}}}
 --             legacy   {"datasets": [{name, source, format, schema}]}
 
@@ -227,6 +227,14 @@ function _M.normalize_routes(raw)
           path = entry.path,
           resource = normalize_legacy_resource(entry.target.file)
         })
+      elseif type(entry.target) == "table"
+             and type(entry.target.dataset) == "string" then
+        -- Legacy dataset route (target.dataset form)
+        table.insert(routes, {
+          path = entry.path,
+          dataset = entry.target.dataset,
+          accessControl = entry.accessControl
+        })
       elseif entry.handler ~= nil then
         -- Dynamic handler route: accepted, resolved as 501 by reactors
         table.insert(routes, {
@@ -238,15 +246,22 @@ function _M.normalize_routes(raw)
     end
   end
 
-  -- Legacy object form: {"routes": {"/path": {target: {file}}}}
+  -- Legacy object form: {"routes": {"/path": {target: {file|dataset}}}}
   for path, entry in pairs(raw.routes) do
     if type(path) == "string" and type(entry) == "table"
-       and type(entry.target) == "table"
-       and type(entry.target.file) == "string" then
-      table.insert(routes, {
-        path = path,
-        resource = normalize_legacy_resource(entry.target.file)
-      })
+       and type(entry.target) == "table" then
+      if type(entry.target.file) == "string" then
+        table.insert(routes, {
+          path = path,
+          resource = normalize_legacy_resource(entry.target.file)
+        })
+      elseif type(entry.target.dataset) == "string" then
+        table.insert(routes, {
+          path = path,
+          dataset = entry.target.dataset,
+          accessControl = entry.accessControl
+        })
+      end
     end
   end
 

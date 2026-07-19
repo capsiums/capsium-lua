@@ -16,7 +16,7 @@ RSpec.describe 'Encrypted packages (ARCHITECTURE.md §6b)' do
       data = parse_json(response)
 
       entry = data['contentValidity'].find do |e|
-        e['package'] == 'encrypted-sample-1.0.0'
+        e['package'] == 'encrypted-sample'
       end
 
       expect(entry).not_to be_nil

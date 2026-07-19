@@ -77,6 +77,25 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
       assert.same({}, principal.roles)
     end)
 
+    it("assigns deploy-time roles to the principal", function()
+      local deploy_roles = { admin = { "admin", "editor" }, other = { "x" } }
+
+      local principal = assert(basic.authenticate(
+        header_for("admin", "s3cret-Passw0rd!"), HTPASSWD, deploy_roles))
+      assert.same({ "admin", "editor" }, principal.roles)
+
+      -- Users without a deploy assignment keep empty roles
+      local sunny = assert(basic.authenticate(
+        header_for("sunny", "s3cret-Passw0rd!"), HTPASSWD, deploy_roles))
+      assert.same({}, sunny.roles)
+
+      -- Non-string entries are ignored
+      local mixed = assert(basic.authenticate(
+        header_for("admin", "s3cret-Passw0rd!"), HTPASSWD,
+        { admin = { "admin", 5, true } }))
+      assert.same({ "admin" }, mixed.roles)
+    end)
+
     it("rejects invalid credentials and malformed headers", function()
       assert.is_nil(basic.authenticate(header_for("admin", "wrong"),
                                        HTPASSWD))

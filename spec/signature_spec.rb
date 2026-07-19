@@ -16,7 +16,7 @@ RSpec.describe 'Digital signatures (ARCHITECTURE.md §6a)' do
       data = parse_json(response)
 
       entry = data['contentValidity'].find do |e|
-        e['package'] == 'signed-sample-1.0.0'
+        e['package'] == 'signed-sample'
       end
 
       expect(entry).not_to be_nil

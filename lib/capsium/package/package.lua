@@ -16,6 +16,7 @@ local router = require "capsium.package.router"
 local security = require "capsium.package.security"
 local composite = require "capsium.package.composite"
 local csv = require "capsium.csv"
+local yaml = require "capsium.yaml"
 
 local _M = {
   _VERSION = "0.4.0"
@@ -290,11 +291,24 @@ function _M:load_authentication()
 end
 
 -- Package-relative name of the tombstone list inside a layer
-local TOMBSTONES_FILE = ".capsium-tombstones"-- Load the tombstone sets of every layer (JSON arrays of merged-view
--- paths). Deletions are RECORDED by writers in the topmost writable layer
--- (section 5a), but readers honor tombstone lists in any layer: a path
--- tombstoned at or above the first serving layer resolves as deleted.
--- Returns { [layer_path] = set } or nil.
+local TOMBSTONES_FILE = ".capsium-tombstones"
+
+-- The merged-view layers (bottom -> top): the implicit content/ layer
+-- plus the configured storage.layers (ARCHITECTURE.md section 5a: each
+-- layer is a package-relative directory mirroring the content/ tree).
+local function view_layers(layers)
+  local view = { { path = "content", visibility = "exported" } }
+  for _, layer in ipairs(layers or {}) do
+    table.insert(view, layer)
+  end
+  return view
+end
+
+-- Load the tombstone sets of every merged-view layer (JSON arrays of
+-- content/-relative paths). Deletions are RECORDED by writers in the
+-- topmost writable layer (section 5a), but readers honor tombstone lists
+-- in any layer: a path tombstoned at or above the first serving layer
+-- resolves as deleted. Returns { [layer_path] = set } or nil.
 function _M:load_tombstones()
   local layers = self.layers
   if not layers then
@@ -304,7 +318,7 @@ function _M:load_tombstones()
   local fs = self.fs_adapter
   local by_layer = nil
 
-  for _, layer in ipairs(layers) do
+  for _, layer in ipairs(view_layers(layers)) do
     local path = self.extract_path .. "/" .. layer.path .. "/" ..
                  TOMBSTONES_FILE
     if fs.file_exists(path) then
@@ -365,16 +379,30 @@ function _M:load_routes()
   return router.generate_routes(self.manifest, self.storage, index)
 end
 
--- Resolve a package-relative resource path through the storage layers
--- (section 5a): layers are searched top-to-bottom and the first hit wins;
--- a path tombstoned at or above the first serving layer resolves as
--- deleted (a file sharing a layer with its tombstone still wins).
--- Without a layers config the package root is the single implicit layer.
+-- True when the dependent viewpoint may see a resource (section 4a/5a):
+-- the manifest must list it with "exported" visibility.
+function _M:exported(resource)
+  local info = self.manifest and self.manifest[resource]
+  return info ~= nil and info.visibility == "exported"
+end
+
+-- Resolve a package-relative resource path through the merged view
+-- (section 5a): the implicit content/ layer plus the configured layers
+-- (each mirroring the content/ tree) are searched top-to-bottom and the
+-- first hit wins; a path tombstoned at or above the first serving layer
+-- resolves as deleted (a file sharing a layer with its tombstone still
+-- wins). Without a layers config the package root is the single implicit
+-- layer.
 --   viewpoint: "self" (default) sees all layers; "dependent" (composite
---     packages, section 4a) sees only exported layers
+--     packages, section 4a) sees only exported layers and resources
 -- Returns absolute path | nil, "tombstoned" | "not_found".
 function _M:find_resource(resource, viewpoint)
   local fs = self.fs_adapter
+
+  -- The dependent viewpoint sees exported resources only (section 4a)
+  if viewpoint == "dependent" and not self:exported(resource) then
+    return nil, "not_found"
+  end
 
   if not self.layers then
     local path = self.extract_path .. "/" .. resource
@@ -384,17 +412,25 @@ function _M:find_resource(resource, viewpoint)
     return nil, "not_found"
   end
 
+  -- Layered packages resolve through the merged view of the content/
+  -- tree: lookups strip the content/ prefix; non-content paths never
+  -- resolve through the view
+  local relative = resource:match("^content/(.+)$")
+  if not relative then
+    return nil, "not_found"
+  end
+
+  local layers = view_layers(self.layers)
   local tombstoned = false
-  for i = #self.layers, 1, -1 do
-    local layer = self.layers[i]
+  for i = #layers, 1, -1 do
+    local layer = layers[i]
     if viewpoint ~= "dependent" or layer.visibility == "exported" then
       local set = self._tombstones and self._tombstones[layer.path]
-      if set and set[resource] then
+      if set and set[relative] then
         tombstoned = true
       end
 
-      local path = self.extract_path .. "/" .. layer.path .. "/" ..
-                   resource
+      local path = self.extract_path .. "/" .. layer.path .. "/" .. relative
       if fs.file_exists(path) then
         return path
       end
@@ -405,6 +441,28 @@ function _M:find_resource(resource, viewpoint)
   end
 
   return nil, "not_found"
+end
+
+-- Resolve a plain content path against the mounted dependencies (section
+-- 4a fallthrough): dependencies act as read-only layers below ALL own
+-- layers, exported resources only. Returns absolute path, dependency |
+-- nil.
+function _M:find_dependency_resource(resource)
+  local guids = {}
+  for guid in pairs(self._dependencies) do
+    table.insert(guids, guid)
+  end
+  table.sort(guids) -- deterministic resolution order
+
+  for _, guid in ipairs(guids) do
+    local dependency = self._dependencies[guid]
+    local path = dependency:find_resource(resource, "dependent")
+    if path then
+      return path, dependency
+    end
+  end
+
+  return nil
 end
 
 -- Resolve a request path to a servable target.
@@ -444,12 +502,22 @@ function _M:resolve(request_path)
     return nil, "Route has no target: " .. tostring(request_path)
   end
 
-  -- Dependency resource reference (section 4a): capsium://<guid>/<path>
+  -- Dependency resource reference (section 4a): <dependency-guid>/<path>
   if composite.is_dependency_ref(route.resource) then
     return self:resolve_dependency_ref(route)
   end
 
   local file_path, fstatus = self:find_resource(route.resource)
+  local source = self
+  if not file_path and fstatus ~= "tombstoned" then
+    -- Fall through to the dependencies' exported content (section 4a);
+    -- own content always shadows dependency content
+    local dependency
+    file_path, dependency = self:find_dependency_resource(route.resource)
+    if dependency then
+      source = dependency
+    end
+  end
   if not file_path then
     if fstatus == "tombstoned" then
       return nil, "Resource was deleted (tombstoned): " .. route.resource
@@ -460,13 +528,13 @@ function _M:resolve(request_path)
   return composite.apply_response_processing({
     kind = "static",
     path = file_path,
-    mime = router.resource_mime(self.manifest, route.resource)
+    mime = router.resource_mime(source:get_manifest(), route.resource)
            or "application/octet-stream",
     headers = route.headers
   }, route)
 end
 
--- Resolve a capsium://<guid>/<path> route against the mounted
+-- Resolve a <dependency-guid>/<path> route against the mounted
 -- dependencies (section 4a). Only exported resources are visible;
 -- referencing a dependency's private resource is an error.
 function _M:resolve_dependency_ref(route)
@@ -514,7 +582,7 @@ function _M:resolve_dependency_ref(route)
 end
 
 -- Mount resolved dependency packages (guid -> Package), making their
--- exported resources visible to capsium:// references (section 4a).
+-- exported resources visible to dependency references (section 4a).
 function _M:set_dependencies(dependencies)
   self._dependencies = dependencies or {}
 
@@ -535,9 +603,10 @@ function _M:set_dependencies(dependencies)
   self._dependency_guids = guids
 end
 
--- Load a dataset by name. Supports JSON and CSV sources
--- (YAML is not supported by this reactor).
--- Returns data (decoded table), format ("json"|"csv") or nil, err.
+-- Load a dataset by name. Supports JSON, YAML and CSV sources
+-- (SQLite is not supported by this reactor; YAML through the minimal
+-- block-style parser in capsium.yaml).
+-- Returns data (decoded table), format ("json"|"yaml"|"csv") or nil, err.
 function _M:get_dataset(name)
   if not self._loaded then
     local ok, err = self:load()
@@ -575,6 +644,12 @@ function _M:get_dataset(name)
       return nil, "Failed to parse dataset " .. name .. ": " .. tostring(data)
     end
     return data, "json"
+  elseif format == "yaml" or format == "yml" then
+    local data, yerr = yaml.parse(content)
+    if not data then
+      return nil, "Failed to parse dataset " .. name .. ": " .. yerr
+    end
+    return data, "yaml"
   elseif format == "csv" then
     local data, cerr = csv.to_objects(content)
     if not data then
@@ -584,7 +659,7 @@ function _M:get_dataset(name)
   end
 
   return nil, "Unsupported dataset format for " .. name ..
-         " (supported: json, csv)"
+         " (supported: json, yaml, csv)"
 end
 
 -- Verify package integrity against security.json (ARCHITECTURE.md sections
@@ -613,6 +688,50 @@ end
 -- True when the package ships a security.json.
 function _M:has_security()
   return self.fs_adapter.file_exists(self.extract_path .. "/security.json")
+end
+
+-- The parsed security.json record (normalized, see security.parse), or nil
+-- when the package ships no security.json or it does not parse.
+function _M:get_security_record()
+  local path = self.extract_path .. "/security.json"
+  if not self.fs_adapter.file_exists(path) then
+    return nil
+  end
+
+  local content = self.fs_adapter.read_file(path)
+  if not content then
+    return nil
+  end
+
+  local ok, raw = pcall(cjson.decode, content)
+  if not ok then
+    return nil
+  end
+
+  return security.parse(raw)
+end
+
+-- True when security.json declares digitalSignatures (section 6a).
+function _M:is_signed()
+  local record = self:get_security_record()
+  return record ~= nil and record.digital_signatures ~= nil
+end
+
+-- Verify the declared digital signature against the extracted contents.
+-- Returns true | false when signed, nil when the package is unsigned.
+function _M:verify_signature()
+  local record = self:get_security_record()
+  if not record or not record.digital_signatures then
+    return nil
+  end
+
+  local crypto = self.crypto
+  if not crypto then
+    crypto = require "capsium.crypto"
+  end
+
+  return security.verify_signature(self.extract_path, self.fs_adapter,
+                                   record, crypto) == true
 end
 
 -- Package identifier (name-version).

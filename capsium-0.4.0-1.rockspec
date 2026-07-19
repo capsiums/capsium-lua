@@ -49,6 +49,7 @@ build = {
       ["capsium.utils"] = "lib/capsium/utils.lua",
       ["capsium.mime"] = "lib/capsium/mime.lua",
       ["capsium.csv"] = "lib/capsium/csv.lua",
+      ["capsium.yaml"] = "lib/capsium/yaml.lua",
       ["capsium.crypto"] = "lib/capsium/crypto.lua",
       ["capsium.semver"] = "lib/capsium/semver.lua",
       ["capsium.registry"] = "lib/capsium/registry.lua",

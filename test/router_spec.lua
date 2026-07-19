@@ -138,6 +138,23 @@ describe("Capsium route normalization and generation", function()
       assert.equals("content/index.html", routes[1].resource)
     end)
 
+    it("normalizes legacy target.dataset routes (array and object forms)",
+       function()
+      local from_array = router.normalize_routes({
+        routes = {
+          { path = "/api/v1/data/animals", target = { dataset = "animals" } }
+        }
+      })
+      assert.equals("animals", from_array[1].dataset)
+
+      local from_object = router.normalize_routes({
+        routes = {
+          ["/api/v1/data/animals"] = { target = { dataset = "animals" } }
+        }
+      })
+      assert.equals("animals", from_object[1].dataset)
+    end)
+
     it("returns nil, err for invalid input", function()
       local routes, err = router.normalize_routes({})
       assert.is_nil(routes)

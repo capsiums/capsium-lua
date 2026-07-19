@@ -65,7 +65,10 @@ function _M.parse(raw)
 end
 
 -- Recursively collect package-relative file paths under a directory,
--- using fs_adapter primitives. security.json itself is excluded.
+-- using fs_adapter primitives. security.json itself is excluded, and so
+-- is every dotfile/dot-directory (.htpasswd, .capsium-tombstones, ...):
+-- they are never checksum-covered (the reference packager's Dir.glob
+-- skips them), so they must not trip the unlisted-file check either.
 local function collect_files(fs, root, prefix, out)
   out = out or {}
   local entries = fs.list_dir(root)
@@ -74,7 +77,7 @@ local function collect_files(fs, root, prefix, out)
   end
 
   for _, entry in ipairs(entries) do
-    if entry ~= "." and entry ~= ".." then
+    if entry ~= "." and entry ~= ".." and entry:sub(1, 1) ~= "." then
       local path = root .. "/" .. entry
       local rel = prefix and (prefix .. "/" .. entry) or entry
 

@@ -13,9 +13,12 @@ local _M = {
 }
 
 -- Check an Authorization header value against htpasswd content.
--- Returns principal { subject = username, roles = {}, method = "basic" }
+--   deploy_roles: optional deploy-time role assignments keyed by username
+--     ({ "alice" = { "admin", ... } }); htpasswd itself carries no role
+--     concept, so roles come from the deployment (section 4b).
+-- Returns principal { subject = username, roles = {...}, method = "basic" }
 -- or nil (missing/malformed header or invalid credentials).
-function _M.authenticate(header, htpasswd_content)
+function _M.authenticate(header, htpasswd_content, deploy_roles)
   if type(header) ~= "string" then
     return nil
   end
@@ -39,11 +42,19 @@ function _M.authenticate(header, htpasswd_content)
     return nil
   end
 
-  -- htpasswd carries no role concept (documented in README):
-  -- authenticated-any satisfies unless a route specifies roles
+  local roles = {}
+  if type(deploy_roles) == "table" and type(deploy_roles[username]) == "table"
+  then
+    for _, role in ipairs(deploy_roles[username]) do
+      if type(role) == "string" then
+        roles[#roles + 1] = role
+      end
+    end
+  end
+
   return {
     subject = username,
-    roles = {},
+    roles = roles,
     method = "basic"
   }
 end

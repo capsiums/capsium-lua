@@ -1,45 +1,40 @@
 -- capsium-lua Composite Package Helpers
--- capsium:// dependency resource references and section-4a route
--- inheritance processing (framework-agnostic, pure functions)
+-- Dependency resource references and section-4a route inheritance
+-- processing (framework-agnostic, pure functions)
 --
--- Dependency resource references look like
---   capsium://<guid-without-scheme>/<package-relative path>
--- e.g. with dependency guid "capsium://example.com/core", the reference
--- "capsium://example.com/core/content/app.js" addresses content/app.js of
--- that dependency. When several dependency guids prefix-match, the
--- longest guid wins (mirrors @capsium/core composite.ts).
+-- Dependency resource references are "<dependency-guid>/<package-relative
+-- path>": any route resource containing "://" whose longest matching
+-- dependency-guid prefix addresses a resource of that dependency, e.g.
+-- with dependency guid "https://example.com/core", the reference
+-- "https://example.com/core/content/app.js" addresses content/app.js of
+-- that package. When several dependency guids prefix-match, the longest
+-- guid wins (mirrors the Ruby reactor's MergedView and @capsium/core
+-- composite.ts).
 
 local _M = {
   _VERSION = "0.4.0"
 }
 
-local CAPSIUM_SCHEME = "capsium://"
-
--- True when `resource` is a dependency reference (capsium://...).
+-- True when `resource` is a dependency reference (a "<guid>/<path>" URI).
 function _M.is_dependency_ref(resource)
-  return type(resource) == "string"
-         and resource:sub(1, #CAPSIUM_SCHEME) == CAPSIUM_SCHEME
+  return type(resource) == "string" and resource:find("://") ~= nil
 end
 
-local function strip_scheme(uri)
-  return (uri:gsub("^[^:]+://", ""))
-end
-
--- Parse a capsium:// resource reference against the known dependency
--- guids (longest guid prefix wins). Returns { guid, path } | nil.
+-- Parse a resource reference against the known dependency guids (longest
+-- guid prefix wins). Returns { guid, path } | nil.
 function _M.parse_ref(resource, dependency_guids)
   if not _M.is_dependency_ref(resource) then
     return nil
   end
 
-  local rest = resource:sub(#CAPSIUM_SCHEME + 1)
   local best = nil
 
   for _, guid in ipairs(dependency_guids or {}) do
-    local key = strip_scheme(guid)
-    if rest:sub(1, #key + 1) == key .. "/" and #rest > #key + 1 then
-      if not best or #key > #strip_scheme(best.guid) then
-        best = { guid = guid, path = rest:sub(#key + 2) }
+    if type(guid) == "string"
+       and resource:sub(1, #guid + 1) == guid .. "/"
+       and #resource > #guid + 1 then
+      if not best or #guid > #best.guid then
+        best = { guid = guid, path = resource:sub(#guid + 2) }
       end
     end
   end

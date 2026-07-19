@@ -4,7 +4,19 @@
 
 image:https://github.com/capsiums/capsium-lua/actions/workflows/test.yml/badge.svg["Lua Library Tests", link="https://github.com/capsiums/capsium-lua/actions/workflows/test.yml"]
 image:https://github.com/capsiums/capsium-lua/actions/workflows/nginx.yml/badge.svg["Nginx Integration Tests", link="https://github.com/capsiums/capsium-lua/actions/workflows/nginx.yml"]
+image:https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml/badge.svg["Capsium Conformance", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
 image:https://img.shields.io/badge/license-MIT-blue.svg["License", link="LICENSE"]
+
+This reactor is conformant with the
+https://github.com/capsiums/capsium-conformance[Capsium conformance kit]
+(classes kept green by the conformance CI workflow):
+
+image:https://img.shields.io/badge/Capsium_Core_Reactor-conformant-0F6B83["Capsium Core Reactor", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
+image:https://img.shields.io/badge/Capsium_signatures-conformant-0F6B83["Capsium signatures", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
+image:https://img.shields.io/badge/Capsium_encryption-conformant-0F6B83["Capsium encryption", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
+image:https://img.shields.io/badge/Capsium_layered--storage-conformant-0F6B83["Capsium layered-storage", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
+image:https://img.shields.io/badge/Capsium_composite-conformant-0F6B83["Capsium composite", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
+image:https://img.shields.io/badge/Capsium_authentication-conformant-0F6B83["Capsium authentication", link="https://github.com/capsiums/capsium-lua/actions/workflows/conformance.yml"]
 
 toc::[]
 
@@ -70,6 +82,7 @@ lib/capsium/                  Framework-agnostic core (the rock)
 ├── utils.lua                 Pure helpers (tables, JSON files, base64)
 ├── mime.lua                  MIME type detection (text/javascript per RFC 9239)
 ├── csv.lua                   Minimal CSV parser (dataset support)
+├── yaml.lua                  Minimal block-style YAML parser (dataset support)
 ├── crypto.lua                Crypto facade (lua-resty-openssl): RSA-SHA256
 │                             verify, RSA-OAEP-SHA256 unwrap, AES-256-GCM
 ├── semver.lua                Semver comparison + range matching (§4a)
@@ -83,7 +96,7 @@ lib/capsium/                  Framework-agnostic core (the rock)
 │   ├── extractor.lua         Atomic .cap extraction (tmp dir + rename),
 │   │                         encrypted-package decryption
 │   ├── decrypter.lua         §6b envelope parsing + DEK unwrap + GCM decrypt
-│   ├── composite.lua         §4a capsium:// refs + response processing
+│   ├── composite.lua         §4a dependency refs + response processing
 │   ├── store.lua             Package store scan + dependency resolution
 │   ├── router.lua            Schema normalization + route auto-generation
 │   └── security.lua          security.json parsing + SHA-256 + signature
@@ -172,8 +185,9 @@ dataset}]}`; legacy array or object forms with `target.file`
 ** every dataset gets `/api/v1/data/<id>`
 * `storage.json` — canonical `{"storage": {"dataSets": {...}}}`;
 legacy `{"datasets": [{name, source, format, schema}]}`. Dataset sources
-are served as JSON (`.json` served as-is, `.csv` converted to JSON
-objects). YAML and SQLite datasets are not supported by this reactor
+are served as JSON (`.json` served as-is, `.yaml`/`.yml` parsed through a
+minimal block-style subset parser, `.csv` converted to JSON objects).
+SQLite datasets are not supported by this reactor
 * `security.json` — when present, every listed file's SHA-256 is verified
 at extraction; the package is *rejected* on mismatch (5xx with reason).
 `content-validity` reports the verification result
@@ -231,7 +245,8 @@ request).
 == Layered storage (§5a)
 
 `storage.layers` (bottom → top) overlays package-relative directories
-onto the content tree:
+mirroring the `content/` tree; `content/` itself is always the implicit
+bottom layer:
 
 [source,json]
 ----
@@ -240,10 +255,11 @@ onto the content tree:
     { "path": "updates", "writable": true,  "visibility": "private" } ] } }
 ----
 
-* Requests resolve against the layers *top → bottom*; the first hit wins
-(so `updates/content/index.html` shadows `base/content/index.html`).
-Without a `layers` config the package root is the single implicit layer.
-* Deletions are tombstones: a JSON array of merged-view paths in a
+* Requests resolve against the merged view *top → bottom*; the first hit
+wins (so `updates/index.html` shadows `base/index.html`, which shadows
+`content/index.html`). Without a `layers` config the package root is the
+single implicit layer.
+* Deletions are tombstones: a JSON array of content/-relative paths in a
 layer's `.capsium-tombstones` file. A path tombstoned at or above the
 first serving layer resolves 404 (a file sharing a layer with its
 tombstone still wins).
@@ -269,8 +285,8 @@ any). Dependencies are extracted (with full integrity verification) and
 mounted recursively; cycles and unsatisfiable ranges fail the package
 with a clear reason.
 
-Dependency content is reachable through `capsium://` route references
-(route inheritance per 05x-routing):
+Dependency content is reachable through route references of the form
+`<dependency-guid>/<path>` (route inheritance per 05x-routing):
 
 [source,json]
 ----
@@ -281,6 +297,9 @@ Dependency content is reachable through `capsium://` route references
 * Only `exported` manifest resources are visible; referencing a
 `private` resource of a dependency is an error, and private layers (§5a)
 are invisible to dependents.
+* Plain `content/` route resources fall through to the dependencies'
+exported content after all own layers miss (own content shadows
+dependency content).
 * `remap` is the effective served path (the original path stops
 matching).
 * `responseHeaders` are added only when absent;
@@ -351,8 +370,10 @@ A package ships `authentication.json`:
                 "scopes": ["openid", "email"] } } }
 ----
 
-When any method is enabled, every package route requires authentication
-(introspection stays open).
+When any method is enabled, every package route requires authentication.
+The `/api/v1/introspect/*` monitoring API is guarded too when the package
+mounted at the root path (`/`) requires authentication (parity with the
+Ruby reactor); with no root mount it stays open.
 
 *Basic auth* is verified Lua-side against the htpasswd file (the
 config-driven architecture mounts everything through one generic
@@ -378,9 +399,11 @@ directive the container entrypoint renders from `resolv.conf`.
 
 *Dataset access control*: route-level `accessControl` is enforced after
 authentication — `authenticationRequired: true` maps to `401`,
-`roles: [...]` maps to `403` unless the principal holds one. Basic-auth
-principals carry no roles (htpasswd has none), so role-gated routes fail
-closed under basic auth; OAuth2 roles come from `userinfo.roles`.
+`roles: [...]` maps to `403` unless the principal holds one. htpasswd
+carries no role concept, so roles come from the deployment:
+`authentication.roles` in `config.json` maps basic-auth usernames (and
+OAuth2 subjects, unioned with `userinfo.roles`) to role arrays; without
+an assignment, role-gated routes fail closed.
 
 == Configuration
 
@@ -454,7 +477,9 @@ overrides, per-mount `"registry"` wins
 `authentication`:: Deploy-time authentication secrets (§4b, never from
 packages): `sessionSecret` (required for OAuth2 sessions),
 `sessionTtl` (default 3600), `oauth2.clientSecret`. Env overrides:
-`CAPSIUM_SESSION_SECRET`, `OAUTH_CLIENT_SECRET`
+`CAPSIUM_SESSION_SECRET`, `OAUTH_CLIENT_SECRET`. `roles` maps identities
+(basic-auth usernames, OAuth2 subjects) to deploy-assigned role arrays,
+e.g. `{"roles": {"alice": ["admin"]}}`
 
 Mount entries:
 
@@ -511,7 +536,10 @@ path}]}]}`
 hash}]}` — SHA-256 of the `.cap` blob
 
 `/api/v1/introspect/content-validity`::: `{contentValidity: [{package,
-valid, lastChecked, reason?}]}` — actual integrity verification result
+valid, lastChecked, reason?, signed?, encrypted, signatureValid?}]}` —
+actual integrity verification result; `signed` records a declared
+§6a signature (with `signatureValid` its verification result) and
+`encrypted` the §6b layout of the source `.cap`
 
 Reactor-level introspection (GET only)::
 
@@ -612,12 +640,42 @@ real legacy-format package.
 Useful rake tasks: `rake docker:start|stop|restart|logs|shell`,
 `rake spec`, `rake test`, `rake clean`.
 
+== Conformance
+
+The reactor is verified against the
+https://github.com/capsiums/capsium-conformance[Capsium conformance kit]
+in the `conformance.yml` workflow, claiming these classes:
+`core-reactor`, `signatures`, `encryption`, `layered-storage`,
+`composite`, `authentication` (handler routes are answered `501`, per
+the kit's rule for reactors not claiming `handler-routes`).
+
+The bridge is `harness/conformance_reactor_adapter.rb`: per fixture it
+builds the reactor image (once per run), generates a config mounting the
+fixture `.cap` at `/` (plus decryption key / deploy authentication /
+package store when the fixture calls for them), starts a detached
+container on an ephemeral loopback port, and hands the kit the base URL
+once nginx answers; a 5xx on the mount means the reactor rejected the
+package (the negative fixtures rely on this). To run it locally:
+
+[source,bash]
+----
+git clone https://github.com/capsiums/capsium-conformance ../capsium-conformance
+cd ../capsium-conformance && bundle install
+CONFORMANCE_ADAPTER=$PWD/../capsium-lua/harness/conformance_reactor_adapter.rb \
+CONFORMANCE_CLASSES=core-reactor,signatures,encryption,layered-storage,composite,authentication \
+  bundle exec rspec
+----
+
+`CONFORMANCE_REBUILD=1` forces an image rebuild after reactor code
+changes (otherwise the first run builds it and later runs reuse it).
+
 == Continuous integration
 
 * `test.yml` — busted matrix (Lua 5.1–5.4, LuaJIT 2.1) + luacheck job
 * `nginx.yml` — RSpec integration suite via `rake ci`
+* `conformance.yml` — Capsium conformance kit via the harness adapter
 
-Both run on push/PR, manually, and weekly (Mondays 06:00 UTC).
+All run on push/PR, manually, and weekly (Mondays 06:00 UTC).
 
 == License
 

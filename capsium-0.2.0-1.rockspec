@@ -1,8 +1,8 @@
 package = "capsium"
-version = "dev-1"
+version = "0.2.0-1"
 
 source = {
-   url = "git://github.com/capsiums/capsium-lua.git"
+   url = "git+https://github.com/capsiums/capsium-lua.git"
 }
 
 description = {
@@ -12,8 +12,10 @@ description = {
       manipulation and HTTP serving (Reactor) for Capsium packages (.cap files).
 
       Features:
-      - Package layer for .cap file manipulation
-      - Reactor layer for HTTP serving
+      - Package layer for .cap file manipulation (canonical + legacy schemas)
+      - SHA-256 integrity verification (security.json, reject on mismatch)
+      - Manifest-driven route auto-generation
+      - Reactor layer for HTTP serving with introspection API
       - Nginx/OpenResty adapter included
       - Multi-package deployment support
       - Flexible routing and configuration
@@ -34,12 +36,20 @@ build = {
    modules = {
       -- Core utilities
       ["capsium.utils"] = "lib/capsium/utils.lua",
+      ["capsium.mime"] = "lib/capsium/mime.lua",
+      ["capsium.csv"] = "lib/capsium/csv.lua",
+
+      -- Reactor core
+      ["capsium.reactor"] = "lib/capsium/reactor.lua",
 
       -- Package layer
-      ["capsium.package.extractor"] = "lib/capsium/package/extractor.lua",
       ["capsium.package.package"] = "lib/capsium/package/package.lua",
+      ["capsium.package.extractor"] = "lib/capsium/package/extractor.lua",
+      ["capsium.package.router"] = "lib/capsium/package/router.lua",
+      ["capsium.package.security"] = "lib/capsium/package/security.lua",
 
       -- Adapters
-      ["capsium.adapters.nginx"] = "lib/capsium/adapters/nginx.lua"
+      ["capsium.adapters.nginx"] = "lib/capsium/adapters/nginx.lua",
+      ["capsium.adapters.hash"] = "lib/capsium/adapters/hash.lua"
    }
 }

@@ -1,55 +1,83 @@
 -- capsium-lua Package Extractor Module
--- Framework-agnostic package extraction functionality
+-- Framework-agnostic package extraction (OOP via metatables)
+--
+-- Extraction is atomic: archives unpack into a temporary directory that is
+-- renamed into place only after metadata.json parses and security.json
+-- checksums verify (ARCHITECTURE.md section 6, reject on mismatch).
 
-local utils = require "capsium.utils"
+local cjson = require "cjson"
+
+local security = require "capsium.package.security"
 
 local _M = {
-  _VERSION = "0.1.0"
+  _VERSION = "0.2.0"
 }
+local _M_mt = { __index = _M }
 
--- Default configuration
-local config = {
-  fs_adapter = nil,  -- File system operations adapter
-  zip_adapter = nil, -- ZIP operations adapter
-}
+-- Create an extractor.
+--   opts.fs_adapter (required): file system adapter
+--   opts.zip_adapter (required): zip archive adapter
+--   opts.hash_fn (optional): function(file_path) -> sha256 hex
+function _M.new(opts)
+  opts = opts or {}
 
--- Initialize the module with configuration and adapters
-function _M.init(cfg)
-  config = utils.merge_tables(config, cfg or {})
-
-  -- Validate required adapters
-  if not config.fs_adapter then
-    error("fs_adapter is required for extractor module")
+  if not opts.fs_adapter then
+    return nil, "fs_adapter is required"
   end
-  if not config.zip_adapter then
-    error("zip_adapter is required for extractor module")
+  if not opts.zip_adapter then
+    return nil, "zip_adapter is required"
   end
 
-  return true
+  local self = {
+    fs_adapter = opts.fs_adapter,
+    zip_adapter = opts.zip_adapter,
+    hash_fn = opts.hash_fn
+  }
+
+  return setmetatable(self, _M_mt)
 end
 
--- Get package info from metadata.json
-function _M.get_package_info(extract_path)
-  local metadata_path = extract_path .. "/metadata.json"
-  local metadata, err = utils.read_json_file(metadata_path)
-
-  if not metadata then
-    return nil, "Failed to read metadata.json: " .. (err or "unknown error")
-  end
-
-  return metadata
+-- Default hash function (lazy require to keep the adapter swappable)
+local function default_hash_fn()
+  return require("capsium.adapters.hash").sha256_file_hex
 end
 
--- Check if package is already extracted and up to date
-function _M.is_extracted(package_path, extract_dir)
-  local fs = config.fs_adapter
+-- Remove a directory tree using fs adapter primitives.
+function _M:remove_tree(path)
+  local fs = self.fs_adapter
 
-  -- Check if package file exists
+  if fs.file_exists(path) then
+    return fs.remove(path)
+  end
+
+  if not fs.dir_exists(path) then
+    return true
+  end
+
+  local entries = fs.list_dir(path)
+  if entries then
+    for _, entry in ipairs(entries) do
+      if entry ~= "." and entry ~= ".." then
+        local ok, err = self:remove_tree(path .. "/" .. entry)
+        if not ok then
+          return nil, err
+        end
+      end
+    end
+  end
+
+  return fs.remove(path)
+end
+
+-- Check whether a package is already extracted and up to date.
+-- Returns true, extract_path when usable; false, reason otherwise.
+function _M:is_extracted(package_path, extract_dir)
+  local fs = self.fs_adapter
+
   if not fs.file_exists(package_path) then
     return false, "Package file does not exist"
   end
 
-  -- Generate extract path based on package name
   local package_name = package_path:match("([^/]+)%.cap$")
   if not package_name then
     return false, "Invalid package filename (must end with .cap)"
@@ -58,12 +86,10 @@ function _M.is_extracted(package_path, extract_dir)
   local extract_path = extract_dir .. "/" .. package_name
   local metadata_path = extract_path .. "/metadata.json"
 
-  -- Check if metadata.json exists in extract path
   if not fs.file_exists(metadata_path) then
     return false, "Package not extracted"
   end
 
-  -- Get modification times
   local package_mtime = fs.get_mtime(package_path)
   local metadata_mtime = fs.get_mtime(metadata_path)
 
@@ -71,7 +97,6 @@ function _M.is_extracted(package_path, extract_dir)
     return false, "Failed to get modification times"
   end
 
-  -- Check if package file is newer than extracted metadata
   if package_mtime > metadata_mtime then
     return false, "Package file is newer than extracted files"
   end
@@ -79,88 +104,127 @@ function _M.is_extracted(package_path, extract_dir)
   return true, extract_path
 end
 
--- Extract a Capsium package
-function _M.extract_package(package_path, extract_dir)
-  local fs = config.fs_adapter
-  local zip = config.zip_adapter
+-- Extract a Capsium package (.cap zip) into extract_dir/<name>.
+-- Returns extract_path or nil, err. On integrity mismatch the package is
+-- rejected: nothing is left at the final extract path.
+function _M:extract(package_path, extract_dir)
+  local fs = self.fs_adapter
+  local zip = self.zip_adapter
 
-  -- Check if package is already extracted
-  local is_extracted, result = _M.is_extracted(package_path, extract_dir)
+  -- Already extracted and up to date?
+  local is_extracted, result = self:is_extracted(package_path, extract_dir)
   if is_extracted then
     return result
   end
 
-  -- Package needs to be extracted
   local package_name = package_path:match("([^/]+)%.cap$")
   if not package_name then
     return nil, "Invalid package filename (must end with .cap)"
   end
 
-  local extract_path = extract_dir .. "/" .. package_name
+  local final_path = extract_dir .. "/" .. package_name
+  local tmp_path = extract_dir .. "/.tmp-" .. package_name
 
-  -- Create extract directory if it doesn't exist
-  local ok, err = fs.mkdir_p(extract_path)
+  -- Clean stale temporary directory from a previous failed extraction
+  if fs.dir_exists(tmp_path) then
+    self:remove_tree(tmp_path)
+  end
+
+  local ok, err = fs.mkdir_p(tmp_path)
   if not ok then
     return nil, "Failed to create extract directory: " .. (err or "unknown")
   end
 
-  -- Open the zip file
-  local zfile, err = zip.open(package_path)
-  if not zfile then
-    return nil, "Failed to open package as zip: " .. (err or "unknown error")
+  local function fail(message)
+    self:remove_tree(tmp_path)
+    return nil, message
   end
 
-  -- Get list of files in archive
-  local files, err = zip.list_files(zfile)
+  -- Open the zip archive
+  local zfile, zerr = zip.open(package_path)
+  if not zfile then
+    return fail("Failed to open package as zip: " .. (zerr or "unknown"))
+  end
+
+  local files, lerr = zip.list_files(zfile)
   if not files then
     zip.close(zfile)
-    return nil, "Failed to list files in package: " .. (err or "unknown")
+    return fail("Failed to list files in package: " .. (lerr or "unknown"))
   end
 
-  -- Extract all files
+  -- Extract every file, guarding against zip-slip path traversal
   for _, filename in ipairs(files) do
-    -- Skip directories (they end with /)
     if not filename:match("/$") then
-      -- Create directories as needed
+      if filename:find("%.%.") then
+        zip.close(zfile)
+        return fail("Refusing to extract unsafe path: " .. filename)
+      end
+
       local dir = filename:match("(.*)/")
       if dir and dir ~= "" then
-        local full_dir = extract_path .. "/" .. dir
-        local ok, err = fs.mkdir_p(full_dir)
-        if not ok then
+        local mok, merr = fs.mkdir_p(tmp_path .. "/" .. dir)
+        if not mok then
           zip.close(zfile)
-          return nil, "Failed to create directory " .. full_dir .. ": " ..
-                      (err or "unknown")
+          return fail("Failed to create directory " .. dir .. ": " ..
+                      (merr or "unknown"))
         end
       end
 
-      -- Extract the file
-      local content, err = zip.read_file(zfile, filename)
+      local content, rerr = zip.read_file(zfile, filename)
       if not content then
         zip.close(zfile)
-        return nil, "Failed to read file from zip: " .. filename .. ": " ..
-                    (err or "unknown error")
+        return fail("Failed to read file from zip: " .. filename .. ": " ..
+                    (rerr or "unknown"))
       end
 
-      -- Write the file
-      local out_path = extract_path .. "/" .. filename
-      local ok, err = fs.write_file(out_path, content, "wb")
-      if not ok then
+      local wok, werr = fs.write_file(tmp_path .. "/" .. filename, content, "wb")
+      if not wok then
         zip.close(zfile)
-        return nil, "Failed to write file " .. out_path .. ": " ..
-                    (err or "unknown error")
+        return fail("Failed to write file " .. filename .. ": " ..
+                    (werr or "unknown"))
       end
     end
   end
 
   zip.close(zfile)
 
-  -- Verify metadata.json exists
-  local metadata_path = extract_path .. "/metadata.json"
-  if not fs.file_exists(metadata_path) then
-    return nil, "Extracted package does not contain metadata.json"
+  -- metadata.json must exist and parse
+  local metadata_content = fs.read_file(tmp_path .. "/metadata.json")
+  if not metadata_content then
+    return fail("Extracted package does not contain metadata.json")
+  end
+  local mok, metadata = pcall(cjson.decode, metadata_content)
+  if not mok or type(metadata) ~= "table" then
+    return fail("Extracted package has an invalid metadata.json")
   end
 
-  return extract_path
+  -- Integrity verification (section 6): reject on checksum mismatch
+  local verified, reason = security.verify(tmp_path, fs,
+    self.hash_fn or default_hash_fn())
+  if not verified then
+    return fail(reason or "Integrity check failed")
+  end
+
+  -- Atomically move into place
+  if fs.dir_exists(final_path) then
+    local rok, rerr = self:remove_tree(final_path)
+    if not rok then
+      self:remove_tree(tmp_path)
+      return nil, "Failed to replace previous extraction: " ..
+             (rerr or "unknown")
+    end
+  end
+
+  local rnok, rnerr = fs.rename(tmp_path, final_path)
+  if not rnok then
+    self:remove_tree(tmp_path)
+    return nil, "Failed to finalize extraction: " .. (rnerr or "unknown")
+  end
+
+  return final_path
 end
+
+-- Backwards-compatible alias
+_M.extract_package = _M.extract
 
 return _M

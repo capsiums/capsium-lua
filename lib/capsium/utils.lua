@@ -2,7 +2,7 @@
 -- Utility functions (framework-agnostic)
 
 local _M = {
-  _VERSION = "0.1.0"
+  _VERSION = "0.2.0"
 }
 
 local lfs = require "lfs"
@@ -64,31 +64,6 @@ function _M.get_packages(dir)
   end
 
   return packages
-end
-
--- Simple hash function (framework-agnostic)
--- Can be overridden by providing a hash_fn option
-function _M.calculate_hash(file_path, hash_fn)
-  local f, err = io.open(file_path, "rb")
-  if not f then
-    return nil, "Failed to open file: " .. tostring(err)
-  end
-
-  local content = f:read("*all")
-  f:close()
-
-  -- Use provided hash function if available
-  if hash_fn and type(hash_fn) == "function" then
-    return hash_fn(content)
-  end
-
-  -- Simple djb2 hash algorithm (pure Lua)
-  local hash = 5381
-  for i = 1, #content do
-    hash = ((hash * 33) + string.byte(content, i)) % (2^32)
-  end
-
-  return string.format("%08x", hash)
 end
 
 -- Format timestamp to ISO 8601

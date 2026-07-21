@@ -1,0 +1,46 @@
+name: ghcr-visibility
+
+# One-shot utility workflow to flip the visibility of the
+# ghcr.io/capsiums/capsium-nginx-reactor image (org-owned container package).
+#
+# GHCR packages created via `secrets.GITHUB_TOKEN` are private by default.
+# Run this once from the Actions UI (Run workflow → public) to make the image
+# publicly pullable without authentication.
+#
+# Requires the repo to be linked to the package (auto-linked by docker.yml) and
+# the repo's Actions role on the package to be "Admin" (set in package settings
+# → Manage Actions access). If the GITHUB_TOKEN lacks admin scope, the API call
+# fails with 403/404 — in that case flip the visibility manually in the package
+# UI: https://github.com/orgs/capsiums/packages/container/capsium-nginx-reactor/settings
+
+on:
+  workflow_dispatch:
+    inputs:
+      visibility:
+        description: 'Target visibility'
+        required: true
+        default: 'public'
+        type: choice
+        options:
+          - public
+          - private
+          - internal
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  set-visibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set package visibility
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Setting capsium-nginx-reactor visibility to '${{ inputs.visibility }}'"
+          gh api -X PATCH \
+            /orgs/${{ github.repository_owner }}/packages/container/capsium-nginx-reactor \
+            -f visibility='${{ inputs.visibility }}'
+          echo "Done."

@@ -51,3 +51,8 @@ extracted/
 test-report.html
 luacov.report.out
 luacov.stats.out
+
+# Locally packed LuaRocks artifacts (release.yml packs + uploads in CI)
+*.rock
+*.src.rock
+*.rockspec.tgz

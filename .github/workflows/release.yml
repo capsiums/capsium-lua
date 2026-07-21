@@ -1,0 +1,60 @@
+name: release
+
+# Release workflow: tag a commit `v*` (e.g. v0.4.0) to publish the capsium
+# LuaRocks rock to luarocks.org using the CAPSIUM_LUAROCKS_API_KEY secret.
+#
+# The repo root contains one rockspec per release (capsium-<ver>-<rev>.rockspec);
+# the workflow uploads the rockspec matching the pushed tag (or, on dispatch,
+# the latest rockspec in the repo).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      rockspec:
+        description: 'Rockspec filename to upload (defaults to highest version in repo root)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Lua + LuaRocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks lua5.3 liblua5.3-dev
+
+      - name: Resolve rockspec
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.rockspec }}" ]; then
+            echo "rockspec=${{ inputs.rockspec }}" >> "$GITHUB_OUTPUT"
+          else
+            rockspec=$(ls capsium-*.rockspec | sort -V | tail -1)
+            echo "Resolved rockspec: $rockspec"
+            echo "rockspec=$rockspec" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lint rockspec
+        run: luarocks lint "${{ steps.resolve.outputs.rockspec }}"
+
+      - name: Pack rock
+        run: luarocks pack "${{ steps.resolve.outputs.rockspec }}"
+
+      - name: Upload to LuaRocks
+        env:
+          LUAROCKS_API_KEY: ${{ secrets.CAPSIUM_LUAROCKS_API_KEY }}
+        run: |
+          if [ -z "$LUAROCKS_API_KEY" ]; then
+            echo "::error::CAPSIUM_LUAROCKS_API_KEY secret is not set"
+            exit 1
+          fi
+          luarocks upload "${{ steps.resolve.outputs.rockspec }}" --api-key="$LUAROCKS_API_KEY"

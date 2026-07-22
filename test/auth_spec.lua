@@ -27,6 +27,19 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
     end
   end
 
+  -- bcrypt / DES / $1$ / $5$ / $6$ all go through crypt(3) via LuaJIT ffi.
+  -- On PUC-Rio Lua (5.1–5.4) there is no ffi, so those formats are
+  -- unsupported by design (htpasswd.lua returns false for them). Skip
+  -- the crypt-only specs there instead of asserting false=truthy.
+  local has_ffi = pcall(require, "ffi")
+  local function it_crypt(name, fn)
+    if has_ffi then
+      it(name, fn)
+    else
+      pending(name .. " (skipped: needs LuaJIT ffi for crypt(3))", fn)
+    end
+  end
+
   describe_backend("htpasswd", function()
     it("verifies apr1 (Apache MD5) entries", function()
       assert.is_true(htpasswd.verify(HTPASSWD, "admin", "s3cret-Passw0rd!"))
@@ -38,12 +51,12 @@ describe("capsium.auth (ARCHITECTURE.md section 4b)", function()
       assert.is_false(htpasswd.verify(HTPASSWD, "sunny", "wrong"))
     end)
 
-    it("verifies bcrypt entries via crypt(3)", function()
+    it_crypt("verifies bcrypt entries via crypt(3)", function()
       assert.is_true(htpasswd.verify(HTPASSWD, "betty", "s3cret-Passw0rd!"))
       assert.is_false(htpasswd.verify(HTPASSWD, "betty", "wrong"))
     end)
 
-    it("verifies traditional DES crypt entries", function()
+    it_crypt("verifies traditional DES crypt entries", function()
       -- htpasswd truncates DES passwords to 8 characters
       assert.is_true(htpasswd.verify(HTPASSWD, "diesel", "secret123"))
       assert.is_false(htpasswd.verify(HTPASSWD, "diesel", "wrong"))

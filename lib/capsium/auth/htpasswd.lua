@@ -25,6 +25,13 @@ if ok_ffi then
   ffi.cdef[[
     char *crypt(const char *key, const char *salt);
   ]]
+  -- On modern glibc (Ubuntu 22.04+), crypt(3) lives in libcrypt.so.1, not
+  -- libc.so.6. Loading it globally merges its symbols into ffi.C so the
+  -- `ffi.C.crypt` call below resolves on both modern glibc and older systems
+  -- where crypt(3) is still part of libc. musl (OpenResty) and old glibc
+  -- don't ship a separate libcrypt, so pcall absorbs the missing-library
+  -- error there and we fall through to ffi.C.crypt.
+  pcall(function() ffi.load("crypt", true) end)
 end
 
 -- ---------------------------------------------------------------------------

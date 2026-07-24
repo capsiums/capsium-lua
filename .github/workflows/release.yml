@@ -35,10 +35,15 @@ jobs:
           # response, but only loads from Lua's package.path — NOT from
           # the luarocks rock tree (which luarocks.loader adds at runtime
           # for `luarocks run`, not for the upload subcommand). Install
-          # dkjson into Lua's default share/ tree so require() finds it.
+          # dkjson into Lua's default share/lua/<ver>/ tree so require()
+          # finds it.
           sudo luarocks install dkjson
           LUA_VER=$(luarocks config lua_version)
-          DKJSON=$(sudo find /usr/local/lib/luarocks -name 'dkjson.lua' -print -quit)
+          DKJSON=$(sudo find /usr/local -name 'dkjson.lua' -print -quit)
+          if [ -z "$DKJSON" ]; then
+            echo "::error::dkjson.lua not found after luarocks install"
+            exit 1
+          fi
           sudo install -m 0644 "$DKJSON" "/usr/local/share/lua/${LUA_VER}/dkjson.lua"
           lua5.3 -e 'assert(require("dkjson")); print("dkjson OK")'
 

@@ -376,9 +376,14 @@ function _M.handle_request()
       return
     end
 
-    local data, derr = package:get_dataset(target.dataset)
+    local data, derr, dkind = package:get_dataset(target.dataset)
     if not data then
-      return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR, tostring(derr))
+      -- Per CC 62001, unsupported dataset kinds (SQLite, future kinds)
+      -- MUST answer 501; other failures are 500. Issue #10.
+      local status = (dkind == "not_implemented") and
+                     ngx.HTTP_NOT_IMPLEMENTED or
+                     ngx.HTTP_INTERNAL_SERVER_ERROR
+      return respond_error(status, tostring(derr))
     end
     ngx.header.content_type = "application/json"
     ngx.say(cjson.encode(data))
@@ -599,7 +604,8 @@ function _M.handle_reactor_introspection()
   local uri = ngx.var.uri
   if uri == "/introspect/status" then
     return respond_json(ngx.HTTP_OK,
-                        Reactor.status_report(started_at, #config.mounts))
+                        Reactor.status_report(started_at,
+                                              count_active_packages()))
   end
   if uri == "/introspect/config" then
     return respond_json(ngx.HTTP_OK, config_report())
@@ -634,6 +640,24 @@ local function find_mounted_package(name)
     end
   end
   return nil
+end
+
+-- Count active packages across configured mounts. Per CC 62001,
+-- /introspect/status reports packagesLoaded as the count of packages
+-- the reactor believes it can serve, not the raw count of configured
+-- mounts: mounts with registry-resolution errors are excluded. We
+-- don't force-load each package here (status is a hot endpoint);
+-- filesystem mounts that fail at first request surface elsewhere
+-- via /introspect/config and per-package status. Issue #10.
+local function count_active_packages()
+  local count = 0
+  for _, mount in ipairs(config.mounts) do
+    if mount.source_guid and not mount.source_file then
+      resolve_registry_mount(mount)
+    end
+    count = count + (mount.resolve_error == nil and 1 or 0)
+  end
+  return count
 end
 
 -- Per-package reports, resolved by package metadata name (404 for

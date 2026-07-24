@@ -606,33 +606,39 @@ end
 -- Load a dataset by name. Supports JSON, YAML and CSV sources
 -- (SQLite is not supported by this reactor; YAML through the minimal
 -- block-style parser in capsium.yaml).
--- Returns data (decoded table), format ("json"|"yaml"|"csv") or nil, err.
+-- Returns data (decoded table), format ("json"|"yaml"|"csv") on success.
+-- On failure returns nil, err, err_kind where err_kind is one of:
+--   "not_implemented" — the dataset kind isn't supported (e.g. SQLite);
+--                       per CC 62001 reactors MUST answer 501.
+--   "unknown"         — no such dataset.
+--   "internal"        — anything else (read failure, decode error).
 function _M:get_dataset(name)
   if not self._loaded then
     local ok, err = self:load()
     if not ok then
-      return nil, err
+      return nil, err, "internal"
     end
   end
 
   local ds = self.storage and self.storage[name]
   if not ds then
-    return nil, "Unknown dataset: " .. tostring(name)
+    return nil, "Unknown dataset: " .. tostring(name), "unknown"
   end
 
   if ds.databaseFile then
-    return nil, "SQLite datasets are not supported by this reactor: " .. name
+    return nil, "SQLite datasets are not supported by this reactor: " .. name,
+               "not_implemented"
   end
 
   if type(ds.source) ~= "string" then
-    return nil, "Dataset has no source: " .. name
+    return nil, "Dataset has no source: " .. name, "internal"
   end
 
   local content, rerr = self.fs_adapter.read_file(
     self.extract_path .. "/" .. ds.source)
   if not content then
     return nil, "Failed to read dataset source " .. ds.source ..
-           ": " .. tostring(rerr)
+                ": " .. tostring(rerr), "internal"
   end
 
   local format = ds.format or ds.source:match("%.([^%.]+)$")
@@ -641,25 +647,26 @@ function _M:get_dataset(name)
   if format == "json" then
     local ok, data = pcall(cjson.decode, content)
     if not ok then
-      return nil, "Failed to parse dataset " .. name .. ": " .. tostring(data)
+      return nil, "Failed to parse dataset " .. name .. ": " .. tostring(data),
+                 "internal"
     end
     return data, "json"
   elseif format == "yaml" or format == "yml" then
     local data, yerr = yaml.parse(content)
     if not data then
-      return nil, "Failed to parse dataset " .. name .. ": " .. yerr
+      return nil, "Failed to parse dataset " .. name .. ": " .. yerr, "internal"
     end
     return data, "yaml"
   elseif format == "csv" then
     local data, cerr = csv.to_objects(content)
     if not data then
-      return nil, "Failed to parse dataset " .. name .. ": " .. cerr
+      return nil, "Failed to parse dataset " .. name .. ": " .. cerr, "internal"
     end
     return data, "csv"
   end
 
   return nil, "Unsupported dataset format for " .. name ..
-         " (supported: json, yaml, csv)"
+              " (supported: json, yaml, csv)", "not_implemented"
 end
 
 -- Verify package integrity against security.json (ARCHITECTURE.md sections

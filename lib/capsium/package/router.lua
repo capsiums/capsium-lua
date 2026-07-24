@@ -378,21 +378,19 @@ function _M.resolve(routes, request_path)
   return route
 end
 
--- MIME type for a route's resource: the extension-derived type wins when
--- known (legacy gem manifests sometimes carry wrong types); the manifest
--- entry is the fallback.
+-- MIME type for a route's resource. Per CC 62001 §05x-manifest, the
+-- manifest-declared type is authoritative; the extension-derived type
+-- is the fallback when the manifest doesn't carry one. (Earlier code
+-- flipped this precedence "because legacy gem manifests sometimes
+-- carry wrong types" — that's a packager-side data-quality issue and
+-- not a reason for the reactor to override declared metadata. Issue #10.)
 function _M.resource_mime(resources, resource_path)
-  local by_extension = mime.type_for(resource_path)
-  if by_extension then
-    return by_extension
-  end
-
   local info = resources and resources[resource_path]
   if info and info.type then
     return info.type
   end
 
-  return nil
+  return mime.type_for(resource_path)
 end
 
 return _M

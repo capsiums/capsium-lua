@@ -264,4 +264,35 @@ describe("Capsium route normalization and generation", function()
       assert.is_nil(router.resolve(routes, "/nope"))
     end)
   end)
+
+  describe("resource_mime (issue #10 — manifest wins, extension fallback)", function()
+    it("returns the manifest-declared type when present", function()
+      local resources = {
+        ["content/index.html"] = { type = "application/xhtml+xml" }
+      }
+      assert.equals("application/xhtml+xml",
+                    router.resource_mime(resources, "content/index.html"))
+    end)
+
+    it("falls back to extension-derived type when manifest lacks one", function()
+      local resources = {
+        ["content/index.html"] = {}
+      }
+      assert.equals("text/html",
+                    router.resource_mime(resources, "content/index.html"))
+    end)
+
+    it("falls back to extension when resources map is nil", function()
+      assert.equals("text/html",
+                    router.resource_mime(nil, "content/index.html"))
+    end)
+
+    it("manifest type wins over a conflicting extension-derived type", function()
+      local resources = {
+        ["content/data.json"] = { type = "application/vnd.custom+json" }
+      }
+      assert.equals("application/vnd.custom+json",
+                    router.resource_mime(resources, "content/data.json"))
+    end)
+  end)
 end)

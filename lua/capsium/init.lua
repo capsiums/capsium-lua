@@ -591,6 +591,24 @@ local function config_report()
   }
 end
 
+-- Count active packages across configured mounts. Per CC 62001,
+-- /introspect/status reports packagesLoaded as the count of packages
+-- the reactor believes it can serve, not the raw count of configured
+-- mounts: mounts with registry-resolution errors are excluded. We
+-- don't force-load each package here (status is a hot endpoint);
+-- filesystem mounts that fail at first request surface elsewhere
+-- via /introspect/config and per-package status. Issue #10.
+local function count_active_packages()
+  local count = 0
+  for _, mount in ipairs(config.mounts) do
+    if mount.source_guid and not mount.source_file then
+      resolve_registry_mount(mount)
+    end
+    count = count + (mount.resolve_error == nil and 1 or 0)
+  end
+  return count
+end
+
 -- GET-only reactor-level reports:
 --   /introspect/status  { status, uptime, packagesLoaded }
 --   /introspect/config  redacted configuration
@@ -616,24 +634,6 @@ function _M.handle_reactor_introspection()
                                                metrics_snapshot()))
   end
   return respond_error(ngx.HTTP_NOT_FOUND, "Not found")
-end
-
--- Count active packages across configured mounts. Per CC 62001,
--- /introspect/status reports packagesLoaded as the count of packages
--- the reactor believes it can serve, not the raw count of configured
--- mounts: mounts with registry-resolution errors are excluded. We
--- don't force-load each package here (status is a hot endpoint);
--- filesystem mounts that fail at first request surface elsewhere
--- via /introspect/config and per-package status. Issue #10.
-local function count_active_packages()
-  local count = 0
-  for _, mount in ipairs(config.mounts) do
-    if mount.source_guid and not mount.source_file then
-      resolve_registry_mount(mount)
-    end
-    count = count + (mount.resolve_error == nil and 1 or 0)
-  end
-  return count
 end
 
 -- Find the mount + loaded package for a package metadata name (registry

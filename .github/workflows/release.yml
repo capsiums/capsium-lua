@@ -31,10 +31,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y luarocks lua5.3 liblua5.3-dev
-          # luarocks upload parses the API response as JSON — needs a JSON
-          # library at the luarocks runner's LUA_PATH (separate from the
-          # rockspec's runtime deps, which get installed by `luarocks pack`).
+          # `luarocks upload` calls require("dkjson") to parse the API
+          # response, but only loads from Lua's package.path — NOT from
+          # the luarocks rock tree (which luarocks.loader adds at runtime
+          # for `luarocks run`, not for the upload subcommand). Install
+          # dkjson into Lua's default share/ tree so require() finds it.
           sudo luarocks install dkjson
+          LUA_VER=$(luarocks config lua_version)
+          DKJSON=$(sudo find /usr/local/lib/luarocks -name 'dkjson.lua' -print -quit)
+          sudo install -m 0644 "$DKJSON" "/usr/local/share/lua/${LUA_VER}/dkjson.lua"
+          lua5.3 -e 'assert(require("dkjson")); print("dkjson OK")'
 
       - name: Resolve rockspec
         id: resolve

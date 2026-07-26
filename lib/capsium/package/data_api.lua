@@ -118,7 +118,7 @@ function M.handle(args)
 
   -- Item operations: GET, PUT, DELETE.
   if method == "GET" then
-    local item, _ekind, emsg = overlay:item(dataset_name, base, id)
+    local item, _, emsg = overlay:item(dataset_name, base, id)
     if not item then
       respond_error(ngx.HTTP_NOT_FOUND, emsg or "no item " .. id)
       return ngx.HTTP_NOT_FOUND

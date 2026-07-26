@@ -16,6 +16,10 @@ files["lib/capsium/adapters/nginx.lua"] = {
   globals = {"ngx"}
 }
 
+files["lib/capsium/package/data_api.lua"] = {
+  globals = {"ngx"}
+}
+
 files["lua/**"] = {
   globals = {"ngx"}
 }

@@ -12,6 +12,8 @@ local hash_adapter = require "capsium.adapters.hash"
 local auth_gate = require "capsium.auth_gate"
 local utils = require "capsium.utils"
 local LogBuffer = require "capsium.log_buffer"
+local Overlay = require "capsium.package.overlay"
+local DataApi = require "capsium.package.data_api"
 local Reactor = require "capsium.reactor"
 local Registry = require "capsium.registry"
 
@@ -29,6 +31,8 @@ local registries = {} -- registry ref -> Registry instance | nil, err memo
 local started_at -- epoch seconds when the reactor initialized
 local metrics -- ngx.shared.capsium_metrics or nil
 local log_buffer -- per-worker ring buffer for /package/<name>/logs
+local mount_overlays = {} -- mount.path -> Overlay instance (lazy)
+local workdir -- reactor workdir root for writable overlays
 
 local function log(level, ...)
   ngx.log(level, "Capsium: ", ...)
@@ -169,6 +173,11 @@ function _M.init(options)
   started_at = os.time()
   metrics = ngx.shared.capsium_metrics
   log_buffer = LogBuffer.new()
+
+  -- Workdir root for writable overlays. Default location keeps the
+  -- extracted package tree tidy; operators can override via the
+  -- `workdir` config key. Created lazily per-mount via mount_overlay.
+  workdir = config.workdir or (config.extract_dir .. "/work")
 
   -- Registry-backed mounts (capsium:// sources): surface configuration
   -- problems at startup. The resolve/download itself is lazy (first
@@ -344,6 +353,45 @@ function _M.handle_request()
     if not principal then
       return -- the gate already answered the request
     end
+  end
+
+  -- Data API: /api/v1/data/<dataset>[/<id>] — handles GET (collection
+  -- + item), POST (append), PUT (replace), DELETE. Bypasses the
+  -- GET-only enforcement below for non-GET methods so writes can
+  -- flow. The data API is wired through a dedicated module; the rest
+  -- of the route resolution handles resource routes only.
+  if DataApi.is_path(subpath) then
+    apply_cors_headers(mount)
+    local dataset_name, item_id = DataApi.parse(subpath)
+    if not dataset_name then
+      return respond_error(ngx.HTTP_NOT_FOUND, "unknown dataset path")
+    end
+
+    local metadata = package:get_metadata()
+    if metadata and metadata.readOnly == true then
+      return respond_error(ngx.HTTP_FORBIDDEN,
+                           "package " .. mount.name .. " is read-only")
+    end
+
+    local overlay = mount_overlay(mount, package)
+    if not overlay then
+      return respond_error(ngx.HTTP_INTERNAL_SERVER_ERROR,
+                           "cannot create writable overlay for " .. mount.name)
+    end
+
+    local loader = function(name)
+      return package:get_dataset(name)
+    end
+
+    DataApi.handle({
+      inner_path = subpath,
+      method = method,
+      dataset_name = dataset_name,
+      id = item_id,
+      overlay = overlay,
+      load_base = loader,
+    })
+    return
   end
 
   -- Resolve the route
@@ -589,6 +637,32 @@ local function config_report()
     authEnabled = deploy.session_secret ~= nil
                   or deploy.oauth2_client_secret ~= nil
   }
+end
+
+-- Count active packages across configured mounts. Per CC 62001,
+-- /introspect/status reports packagesLoaded as the count of packages
+-- the reactor believes it can serve, not the raw count of configured
+-- mounts: mounts with registry-resolution errors are excluded. We
+-- don't force-load each package here (status is a hot endpoint);
+-- Returns the Overlay for a mount, creating it lazily on first call.
+-- The overlay persists for the worker's lifetime; subsequent writes
+-- reuse the in-memory op log cache plus the on-disk persistence
+-- (overlays/<pkg>/data/<dataset>.json under the workdir). The
+-- metadata's name is used as the overlay directory so multiple mounts
+-- serving different packages don't collide.
+local function mount_overlay(mount, package)
+  local key = mount.path
+  if mount_overlays[key] then return mount_overlays[key] end
+
+  local metadata = package:get_metadata() or {}
+  local pkg_name = metadata.name or mount.name
+  local overlay, oerr = Overlay.new(workdir, pkg_name)
+  if not overlay then
+    log(ngx.ERR, "failed to create overlay for ", pkg_name, ": ", oerr)
+    return nil
+  end
+  mount_overlays[key] = overlay
+  return overlay
 end
 
 -- Count active packages across configured mounts. Per CC 62001,

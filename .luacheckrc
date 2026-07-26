@@ -28,7 +28,8 @@ files["test/**"] = {
   globals = {
     "describe", "insulate", "expose", "it", "pending",
     "before_each", "after_each", "setup", "teardown",
-    "assert", "spy", "mock", "stub", "finally"
+    "assert", "spy", "mock", "stub", "finally",
+    "lfs"
   }
 }
 

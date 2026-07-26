@@ -223,6 +223,27 @@ local function respond_error(status, message)
   return respond_json(status, { error = message })
 end
 
+-- Returns the Overlay for a mount, creating it lazily on first call.
+-- The overlay persists for the worker's lifetime; subsequent writes
+-- reuse the in-memory op log cache plus the on-disk persistence
+-- (overlays/<pkg>/data/<dataset>.json under the workdir). The
+-- metadata's name is used as the overlay directory so multiple mounts
+-- serving different packages don't collide.
+local function mount_overlay(mount, package)
+  local key = mount.path
+  if mount_overlays[key] then return mount_overlays[key] end
+
+  local metadata = package:get_metadata() or {}
+  local pkg_name = metadata.name or mount.name
+  local overlay, oerr = Overlay.new(workdir, pkg_name)
+  if not overlay then
+    log(ngx.ERR, "failed to create overlay for ", pkg_name, ": ", oerr)
+    return nil
+  end
+  mount_overlays[key] = overlay
+  return overlay
+end
+
 -- ---------------------------------------------------------------------------
 -- CORS
 -- ---------------------------------------------------------------------------
@@ -644,27 +665,6 @@ end
 -- the reactor believes it can serve, not the raw count of configured
 -- mounts: mounts with registry-resolution errors are excluded. We
 -- don't force-load each package here (status is a hot endpoint);
--- Returns the Overlay for a mount, creating it lazily on first call.
--- The overlay persists for the worker's lifetime; subsequent writes
--- reuse the in-memory op log cache plus the on-disk persistence
--- (overlays/<pkg>/data/<dataset>.json under the workdir). The
--- metadata's name is used as the overlay directory so multiple mounts
--- serving different packages don't collide.
-local function mount_overlay(mount, package)
-  local key = mount.path
-  if mount_overlays[key] then return mount_overlays[key] end
-
-  local metadata = package:get_metadata() or {}
-  local pkg_name = metadata.name or mount.name
-  local overlay, oerr = Overlay.new(workdir, pkg_name)
-  if not overlay then
-    log(ngx.ERR, "failed to create overlay for ", pkg_name, ": ", oerr)
-    return nil
-  end
-  mount_overlays[key] = overlay
-  return overlay
-end
-
 -- Count active packages across configured mounts. Per CC 62001,
 -- /introspect/status reports packagesLoaded as the count of packages
 -- the reactor believes it can serve, not the raw count of configured

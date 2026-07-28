@@ -66,6 +66,9 @@ build = {
       ["capsium.package.store"] = "lib/capsium/package/store.lua",
       ["capsium.package.router"] = "lib/capsium/package/router.lua",
       ["capsium.package.security"] = "lib/capsium/package/security.lua",
+      ["capsium.package.rnp"] = "lib/capsium/package/rnp.lua",
+      ["capsium.package.overlay"] = "lib/capsium/package/overlay.lua",
+      ["capsium.package.data_api"] = "lib/capsium/package/data_api.lua",
 
       -- Authentication (section 4b)
       ["capsium.auth.htpasswd"] = "lib/capsium/auth/htpasswd.lua",

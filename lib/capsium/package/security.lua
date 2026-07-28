@@ -157,6 +157,22 @@ function _M.verify_signature(extract_path, fs, security_record, crypto)
     return nil, perr
   end
 
+  -- Detect OpenPGP vs X.509 signatures: when the public key is
+  -- OpenPGP-armored, use the rnp FFI path (librnp). Otherwise use
+  -- the existing RSA-SHA256 / X.509 path via lua-resty-openssl.
+  local rnp = require "capsium.package.rnp"
+  if rnp.is_openpgp_key(public_pem) then
+    if not rnp.available() then
+      return nil, "OpenPGP signature declared but librnp is unavailable. " ..
+                  rnp.missing_reason()
+    end
+    local vok, verr = rnp.verify_detached(payload, signature, public_pem)
+    if not vok then
+      return nil, "OpenPGP signature verification failed: " .. tostring(verr)
+    end
+    return true
+  end
+
   local ok, verr = crypto.rsa_sha256_verify(public_pem, payload, signature)
   if ok == nil then
     return nil, "Digital signature verification failed: " .. tostring(verr)
